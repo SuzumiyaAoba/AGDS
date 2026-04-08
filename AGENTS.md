@@ -6,6 +6,8 @@ This repository is currently docs-first. `docs/PLANS.md` is the source of truth 
 
 Implementation is planned as a `pnpm` monorepo. Follow the layout described in `docs/PLANS.md`: `packages/core` for domain logic, `packages/adapter-*` for infrastructure, `packages/cli` and `packages/server` for interfaces, `fixtures/vault` for sample Markdown data, and `docker/` for local Neo4j setup.
 
+Execution plans under `docs/exec-plans/` must be moved through folders as work progresses: move a plan from `backlog/` to `active/` before starting it, and move it from `active/` to `done/` once the work is complete.
+
 ## Build, Test, and Development Commands
 
 No build, lint, or test scripts are committed yet. Until the workspace is scaffolded, keep changes focused on documentation and planning artifacts.
