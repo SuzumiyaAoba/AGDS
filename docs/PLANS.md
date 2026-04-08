@@ -51,6 +51,9 @@ HTTP and (later) MCP.
   The filesystem is the default adapter; RDBMS, document databases,
   object storage, and Git providers are anticipated future adapters.
 - Single-user / single-project (no multi-tenant support).
+- **One vault per process** in v1. The config exposes a single `vault`
+  block and every CLI/HTTP command operates on that one configured vault.
+  Multi-vault orchestration is explicitly deferred.
 - No automatic watcher; the graph is refreshed via an explicit `sync`
   command. Users MAY wire `sync` into their own pre-commit hook or CI.
 
@@ -86,6 +89,10 @@ Rules:
 - `xxx` is anchor text; `yyy.md` is a vault-resolvable reference (a path
   on the FS adapter, or any string the active store's `LinkResolver`
   understands) and MAY include a `#heading` anchor.
+- `yyy.md` is illustrative only. The persisted payload is an opaque,
+  store-formatted locator string produced by the active store's
+  `formatLinkTarget(ref)` contract and later parsed by
+  `resolveLinkTarget(raw)`.
 - The parser operates on the Markdown AST (remark/mdast) using a custom
   micromark extension, so the syntax survives formatters and does not
   collide with standard Markdown links.
@@ -104,11 +111,11 @@ fields are passed through untouched.
 
 | Field | Meaning |
 |-------|---------|
-| `agds.id` | Stable id override (otherwise derived) |
+| `agds.id` | Optional user-facing stable identifier, promoted to `Document.publicId`; does not replace the internal `Document.id` |
 | `agds.tags` | Tags promoted to `(:Tag)` nodes |
 | `agds.summary` | LLM-managed summary; written by `summarize` |
 | `agds.doNotSuggest` | If `true`, exclude this document from `suggest` |
-| `agds.frozen` | If `true`, refuse any AGDS-side rewrite |
+| `agds.frozen` | If `true`, refuse any AGDS-side rewrite (`suggest`, `review`, `summarize`, `types normalize --apply`) |
 
 Suggestion writeback uses **fence markers** so the rewriter can locate the
 managed region without ever touching surrounding prose:
@@ -130,9 +137,15 @@ never overwritten silently.
 
 ### 3.1 Nodes
 
-- `(:Document {id, vaultId, storeId, storeKey, path?, title, hash, bytes, storeVersion, updatedAt, summary, archived, schemaVersion})`
+- `(:Document {id, publicId?, vaultId, storeId, storeKey, path?, title, hash, bytes, storeVersion, updatedAt, summary, archived, schemaVersion})`
   - `id` — stable identifier: `sha1(vaultId + ":" + storeKey)`, truncated
-    to 16 hex chars. Independent of any filesystem path.
+    to 16 hex chars. Independent of the optional presentation `path`
+    field, but only as stable as the active store's `storeKey` policy.
+  - `publicId` — optional user-facing identifier sourced from
+    `agds.id`. It MUST be unique within a vault when present and is
+    resolved before the internal `id`, but it does not participate in
+    graph identity. Sync fails with `AGDS_DOCUMENT_PUBLIC_ID_CONFLICT`
+    if two live documents claim the same `publicId`.
   - `vaultId` — id of the logical vault this document belongs to.
   - `storeId` — id of the `DocumentStore` adapter that owns the document.
   - `storeKey` — opaque key the store uses to address this document.
@@ -159,9 +172,15 @@ never overwritten silently.
 
 #### 3.1.1 Identity & Rename Detection
 
-- If the active store provides a stable key (RDBMS PK, object key,
-  inode, Git blob id), AGDS uses that key as `storeKey` and identity is
-  fixed for the lifetime of the document. Renames are free.
+- If the active store provides a stable key (RDBMS PK, inode where
+  reliable, explicit store-side UUID), AGDS uses that key as `storeKey`
+  and identity is fixed for the lifetime of the document. Renames are
+  free.
+- Git-backed stores do **not** get `stableKeys` from Git objects alone:
+  blob ids change whenever content changes, so they are unsuitable as
+  per-document identity. A Git adapter therefore typically reports
+  `capabilities.stableKeys === false` and preserves history via rename
+  evidence instead of immutable `storeKey`s.
 - **Preferred evidence.** When the store advertises `capabilities.vcs
   === "git"`, rename detection uses the store's native rename tracking
   (`git log --follow` / `--diff-filter=R`), not content hashes. The FS
@@ -221,15 +240,26 @@ same source to the same target with the same type are represented as
 distinct edges, so `review` can accept/reject them individually and
 `sync` can reconcile them independently.
 
-`occurrenceKey` is computed deterministically by the parser from the
-link's position in the document AST:
+`occurrenceKey` is computed deterministically by the parser from normalized
+document context plus link payload:
 
-- For explicit links in body text: a stable slug derived from
-  `(containing heading slug, block index, inline index)`.
-- For suggestions inside the managed `agds:suggested-links` fence: the
-  index within the fence, prefixed with `"sl:"`.
+- For explicit links in body text:
+  `"ex:" + sha1(containing heading slug, normalized targetRef,
+  normalizedAnchorText, targetAnchor?, nth occurrence among identical
+  link payloads within that heading)`. This avoids re-keying unchanged
+  links when unrelated blocks are inserted elsewhere in the document.
+- For suggestions inside the managed `agds:suggested-links` fence:
+  `"sl:" + sha1(normalized targetRef, normalizedAnchorText,
+  targetAnchor?)`. The key is derived from normalized payload, not fence
+  position, and it intentionally excludes mutable review-time fields
+  such as `type`, so removing a sibling suggestion or editing the type
+  does not re-key the remaining entries.
 - For edges minted directly (not from Markdown — e.g. an imported
   snapshot): `"ext:" + sha1(payload)`.
+
+Within one source document, managed-section suggestions MUST have unique
+`occurrenceKey`s regardless of `type`. This keeps document-side lookup by
+`occurrenceKey` unambiguous during `review`.
 
 The parser regenerates `occurrenceKey`s on every sync; they must be
 **stable across runs** for unchanged content, and **stable under
@@ -247,7 +277,18 @@ The APOC Core plugin is therefore a hard requirement.
   provenance.
 - A `(:RelationType)-[:ALIAS_OF]->(:RelationType)` edge records synonyms.
   A canonicalization pass (LLM-assisted, run via `agds types normalize`)
-  merges aliases into a single canonical form to prevent type explosion.
+  proposes a canonical form and, with `--apply`, rewrites both document
+  tokens and graph edges to that canonical type. Alias metadata alone is
+  not considered authoritative because documents remain the source of
+  truth (§4.4).
+- Suggestion generation, review-time `edit-type`, and duplicate
+  suppression all canonicalize candidate type names through the registry
+  before fingerprinting or persistence. Alias spellings therefore map to
+  the same semantic proposal.
+- `agds types normalize` defaults to a dry-run plan. `--apply` performs
+  document-first rewrites under the normal consistency model (§4.4) and
+  preserves `occurrenceKey`s because type edits do not participate in the
+  key derivation.
 - `agds types` and `agds types describe <name>` expose the registry.
 
 ### 3.4 Constraints & Indexes
@@ -259,7 +300,9 @@ CREATE CONSTRAINT heading_id   IF NOT EXISTS FOR (h:Heading)      REQUIRE h.id  
 CREATE CONSTRAINT tag_name     IF NOT EXISTS FOR (t:Tag)          REQUIRE t.name IS UNIQUE;
 CREATE CONSTRAINT reltype_name IF NOT EXISTS FOR (r:RelationType) REQUIRE r.name IS UNIQUE;
 CREATE CONSTRAINT meta_key     IF NOT EXISTS FOR (m:AgdsMeta)     REQUIRE m.key  IS UNIQUE;
+CREATE CONSTRAINT lock_scope   IF NOT EXISTS FOR (l:AgdsLock)     REQUIRE l.scope IS UNIQUE;
 CREATE INDEX      doc_title    IF NOT EXISTS FOR (d:Document)     ON (d.title);
+CREATE INDEX      doc_publicid IF NOT EXISTS FOR (d:Document)     ON (d.publicId);
 CREATE INDEX      doc_path     IF NOT EXISTS FOR (d:Document)     ON (d.path);
 ```
 
@@ -358,11 +401,13 @@ validated input objects and return domain values (or throw typed
    Batching, rate-limiting, and cache lookups happen behind the
    `LlmClient` and `Cache` ports.
 6. **LinkRewriter** — applies accept/reject decisions to documents and
-   graph (write document, then promote edge, with rollback on failure).
+   graph using the repository-wide consistency model: write the
+   document first, then update the graph, and emit reconciliation
+   events instead of promising cross-store rollback.
 7. **QueryService** — executes Cypher through `GraphStore` with a
    read-only default and an allowlist for writes.
 8. **RelationTypeService** — tracks dynamic relationship types and
-   aliases.
+   aliases, and plans/applies canonical type rewrites.
 9. **ReviewService** — enumerates pending edges and applies decisions;
    the *interaction* (TUI prompts, HTTP long-poll, etc.) lives in the
    adapter, not here.
@@ -396,7 +441,7 @@ export interface DocumentStore {
   readonly capabilities: {
     write: boolean;               // can persist edits
     watch: boolean;               // can emit change events
-    transactions: boolean;        // supports atomic multi-doc writes
+    transactions: boolean;        // supports atomic writes within the DocumentStore itself
     stableKeys: boolean;          // storeKey survives renames
     vcs: "none" | "git";          // backing version-control system
   };
@@ -405,6 +450,8 @@ export interface DocumentStore {
   read(ref: DocumentRef): Promise<DocumentBlob>;
   write(ref: DocumentRef, body: string, opts?: WriteOpts): Promise<DocumentBlob>;
   stat(ref: DocumentRef): Promise<DocumentStat>;
+  resolveLinkTarget(raw: string): Promise<DocumentRef | null>;
+  formatLinkTarget(ref: DocumentRef): string;
   delete?(ref: DocumentRef): Promise<void>;
   watch?(filter?: ListFilter): AsyncIterable<DocumentChange>;
 }
@@ -487,11 +534,14 @@ attempt distributed transactions across them. The consistency contract is:
 - **Documents are authoritative; the graph is derived.** Any field that
   also exists in a document (links, tags, headings, summary) is recovered
   from the document on the next `sync`.
-- **Writeback order** for `suggest` / `review`:
+- **Writeback order** for `suggest` / `review` / `summarize`:
   1. Write the document via `DocumentStore.write`.
   2. Write the graph via `GraphStore.executeWrite`.
   3. If step 2 fails, log a reconciliation event and continue. The next
      `sync` cycle compares hashes and converges.
+- `types normalize --apply` follows the same document-first rule:
+  rewrite document tokens to the canonical type, then reconcile graph
+  edges and `RelationType` aliases.
 - **Invariant**: the graph may lag the documents by at most one `sync`
   cycle. It never diverges silently — hash comparison detects any drift.
 - Stores that advertise `capabilities.transactions` MAY participate in a
@@ -507,7 +557,7 @@ attempt distributed transactions across them. The consistency contract is:
 agds init                                       # Create config, install constraints, check APOC
 agds doctor                                     # Verify config, Neo4j connectivity, APOC, LLM key, schema
 agds migrate                                    # Apply pending Neo4j schema migrations
-agds sync [--vault <id>] [--target <ref>] [--since <marker>] [--dry-run] [--full]
+agds sync [--target <ref>] [--since <marker>] [--dry-run] [--full]
 agds query "<cypher>"                           # Read-only Cypher (default)
 agds query --write "<cypher>"                   # Write Cypher (explicit opt-in + confirm)
 agds suggest [--target <ref>] [--since <ref>] [--limit <n>] [--dry-run] [--refresh]
@@ -519,22 +569,23 @@ agds neighbors <ref> [--type <REL>] [--depth <n>] [--status active|pending|any]
 agds backlinks <ref>                            # List documents pointing at <ref>
 agds types [--json]                             # List known relationship types
 agds types describe <name>                      # Show registry entry for a type
-agds types normalize                            # Run alias canonicalization pass
+agds types normalize [--dry-run] [--apply]     # Plan/apply canonical type rewrites
 agds verify                                     # Lint: broken links, orphans, cycles, unknown types
 agds export --format graphml|dot|cypher|json    # Snapshot the graph
 agds import <file>                              # Restore a snapshot (refuses non-empty graph w/o --force)
 agds prompts list|show|diff                     # Inspect bundled LLM prompts
-agds unlock --force                             # Reclaim a stale advisory lock
+agds unlock [--scope write] --force             # Reclaim a stale advisory lock
 agds serve [--host 127.0.0.1] [--port 7475] [--token <t>] [--cors <origin>]
 agds serve-mcp                                  # Expose tools as an MCP server (M7)
 ```
 
-Global flags: `--vault <id>`, `--format json|table|cypher`, `--quiet`,
-`--verbose`, `--json-logs`, `--remote <url>`, `--token <t>`.
+Global flags: `--format json|table|cypher`, `--quiet`, `--verbose`,
+`--json-logs`, `--remote <url>`, `--token <t>`, `--insecure`.
 Default output format is JSON to ease LLM consumption.
 
-`<ref>` accepts: a `DocumentRef` JSON, a store-key, or — when the active
-adapter advertises a `path` hint — a path string for convenience.
+`<ref>` accepts: a `DocumentRef` JSON, `Document.publicId`,
+`Document.id`, a store-key, or — when the active adapter advertises a
+`path` hint — a path string for convenience.
 
 ### 5.1 Prompt Management
 
@@ -589,8 +640,14 @@ adapter advertises a `path` hint — a path string for convenience.
 
 ### 7.1 `sync` Flow
 
-1. Load config and instantiate the configured `DocumentStore`. Acquire an
-   advisory lock (`scope:"sync"`) via `MERGE (l:AgdsLock {scope:"sync"})`.
+1. Load config and instantiate the configured `DocumentStore`. Acquire the
+   shared write lock (`scope:"write"`) with a compare-and-set write:
+   create the `AgdsLock` node if absent, otherwise replace `holder` only
+   when `expiresAt < now()`. If the lock is still live, fail with
+   `AGDS_LOCK_CONFLICT`. All mutating content commands (`sync`,
+   `suggest`, `review`, `summarize`, `types normalize --apply`,
+   `query --write`, `import`) use this same lock scope so document and
+   graph rewrites never overlap.
 2. Enumerate `DocumentRef`s via `store.list(filter)`. Pass `--since` as
    `filter.since` so stores that support incremental enumeration can
    short-circuit. Compute `hash` from each blob; the store MAY supply a
@@ -622,8 +679,11 @@ adapter advertises a `path` hint — a path string for convenience.
 6. All graph writes for a single document happen inside one
    `executeWrite` transaction. Document-side writes go through
    `DocumentStore.write`; if the store advertises
-   `capabilities.transactions`, both are bundled into a store-side
-   transaction. Otherwise the core uses the §4.4 reconciliation strategy.
+   `capabilities.transactions`, the document-side mutation for a single
+   rewrite may be staged or committed atomically within the
+   `DocumentStore` itself, but **never** as a cross-store transaction
+   with Neo4j. Cross-store failure handling always falls back to the
+   §4.4 reconciliation strategy.
 7. Services check `store.capabilities.write` before attempting writeback.
    Read-only stores still support `sync`, `query`, `resolve`, `fetch`,
    `neighbors`, `backlinks`, and `suggest --dry-run`.
@@ -635,6 +695,9 @@ adapter advertises a `path` hint — a path string for convenience.
 
 1. Select candidate documents (`--target`, `--since <git-ref>`, or all
    non-archived, excluding `agds.doNotSuggest`).
+   Documents with
+   `agds.frozen=true` are skipped for mutating runs and MAY be included in
+   `--dry-run` output with a `frozen` skip reason.
 2. For each doc, load its neighborhood (existing edges up to depth 2) from
    Neo4j and a short excerpt.
 3. Call the LLM with a structured-output contract:
@@ -642,7 +705,7 @@ adapter advertises a `path` hint — a path string for convenience.
    ```ts
    {
      suggestions: [{
-       targetRef: DocumentRef | { hint: string },
+       target: { locator: string } | { hint: string },
        type: string,
        rationale: string,
        confidence: number,
@@ -652,32 +715,54 @@ adapter advertises a `path` hint — a path string for convenience.
    ```
 
 4. Validate with zod. Drop candidates that (a) fall below the confidence
-   threshold, (b) already exist as an active edge, or (c) already exist as
-   a pending edge, unless `--refresh` is set.
+   threshold, (b) already exist as an active edge for the same target and
+   type, or (c) already exist as a pending **or rejected** suggestion with
+   the same **proposal fingerprint**, unless `--refresh` is set.
+   Before these checks, proposed `type` values are validated and
+   canonicalized through `RelationTypeService`; downstream logic uses the
+   canonical type name, not the raw alias spelling emitted by the LLM.
+   A candidate must also resolve to an existing `DocumentRef`: `locator`
+   values are resolved with `DocumentStore.resolveLinkTarget(raw)`, while
+   `{ hint }` proposals are passed through the normal resolver and dropped
+   with a warning if they remain ambiguous or unresolved.
+   The proposal fingerprint is
+   `(sourceDocId, targetDocId, canonicalType, normalizedAnchorText,
+   targetAnchor?)`; `rationale`, `confidence`, and model metadata are
+   excluded so the same semantic proposal is recognized across runs even
+   when aliases differ.
 5. For surviving candidates:
-   - Append `[?[anchorText|TYPE](targetRef)]` inside the managed
+   - Serialize the resolved `DocumentRef` back into Markdown with
+     `locator = DocumentStore.formatLinkTarget(targetRef)`, then append
+     `[?[anchorText|TYPE](<locator>)]` inside the managed
      `<!-- agds:suggested-links start --> … <!-- agds:suggested-links end -->`
      fence (§2.1). If the fence is absent it is created at the end of
      the document; if it exists but contains hand-written content,
      abort with `AGDS_MANAGED_SECTION_CONFLICT`.
-   - Upsert the edge with `status:"pending"` and a fresh
-     `occurrenceKey` of the form `"sl:<index>"` based on its position
-     inside the fence.
+   - Upsert the edge with `status:"pending"` and an `occurrenceKey`
+     derived from the immutable portion of that normalized payload
+     (`"sl:" + sha1(normalized targetRef, normalizedAnchorText,
+     targetAnchor?)`), so managed-section edits or review-time type
+     changes do not invalidate API identifiers for surviving
+     suggestions.
    - Skip candidates that would collide with an existing edge at the
-     same `(sourceDocId, targetDocId, type, occurrenceKey)` — the LLM
-     may regenerate identical suggestions across runs.
+     same `(sourceDocId, targetDocId, type, occurrenceKey)` or that
+     would reuse an existing managed-section `occurrenceKey` with a
+     different `type`; the latter is disallowed because document-side
+     review lookup must stay one-to-one.
    - Register any new `TYPE` in `RelationType`.
 6. `--dry-run` skips both document and graph writes.
 
 ### 7.3 `resolve` / `fetch` Flow
 
 1. Accept: raw `[[...]]` / `[?[...]]` token, `DocumentRef` JSON,
-   `Document.id`, store key, `key#heading`, or bare title.
+   `Document.publicId`, `Document.id`, store key, `key#heading`, or bare
+   title.
 2. Normalization ladder (capability-aware):
    - if input parses as a `DocumentRef`, look it up directly;
    - if the store has `stableKeys`, try `storeKey` exact match;
    - if the store has a `path` hint convention (FS, Git), try the path
      ladder (exact → case-insensitive);
+   - try `Document.publicId` exact;
    - try `Document.id` exact;
    - try `Document.title` exact;
    - try `Heading.slug` within a document (for `#anchor`);
@@ -703,7 +788,11 @@ adapter advertises a `path` hint — a path string for convenience.
    suggestions toward the same target are presented as independent
    items.
    The HTTP API uses this same tuple directly in
-   `/v1/review/decisions`; there is no separate synthetic `edgeId`.
+   `/v1/review/pending` and `/v1/review/decisions`; there is no
+   separate synthetic `edgeId`.
+   Pending items whose source document has `agds.frozen=true` are surfaced
+   as read-only and cannot be accepted/rejected until the document is
+   unfrozen.
 2. For each, show source/target excerpts and the LLM's rationale; prompt
    accept / reject / skip / edit-type.
 3. **Accept** — rewrite the specific `[?[...]]` occurrence to `[[...]]`
@@ -712,17 +801,30 @@ adapter advertises a `path` hint — a path string for convenience.
    for the same `(source, target, type)` pair are untouched.
 4. **Reject** — remove the specific `[?[...]]` occurrence from the
    document, set the edge's `status` to `rejected`, keep `rationale`.
-   Rejected edges survive future `sync` passes (§7.1 step 4), so the
-   same suggestion will not be re-proposed unless `suggest --refresh`
-   is passed.
+   Rejected edges survive future `sync` passes (§7.1 step 4), and
+   `suggest` suppresses any future candidate with the same proposal
+   fingerprint unless `suggest --refresh` is passed.
 5. **Edit-type** — change the edge type before acceptance; the new
-   type is registered and the `occurrenceKey` is preserved so the
-   decision audit trail remains intact.
+   type is canonicalized through the relation-type registry, registered if
+   needed, and the `occurrenceKey` is preserved so the decision audit
+   trail remains intact.
 6. All document rewrites are buffered and flushed atomically per
    document. Rewrites only touch bytes inside the managed
    `<!-- agds:suggested-links start --> … <!-- agds:suggested-links end -->`
    fence (§2.1) or the original inline position identified by
    `occurrenceKey`; surrounding prose is preserved byte-for-byte.
+
+### 7.5 `summarize` Flow
+
+1. Resolve the target document and refuse the operation if
+   `agds.frozen=true`.
+2. Call the LLM with the document body and write the returned summary to
+   `agds.summary` in frontmatter.
+3. Persist the document first, then update `Document.summary` in the
+   graph under the shared consistency model (§4.4).
+4. If the graph write fails after the document write succeeds, emit a
+   reconciliation event and rely on the next `sync` to recover the graph
+   from document state.
 
 ---
 
@@ -742,11 +844,12 @@ GET    /openapi.json
 GET    /v1/types                                ?cursor=&limit=
 GET    /v1/types/:name
 POST   /v1/query                                { cypher, params?, write? }
-POST   /v1/sync                                 { vault?, target?, since?, dryRun?, full? }
+POST   /v1/sync                                 { target?, since?, dryRun?, full? }
 POST   /v1/suggest                              { target?, since?, limit?, dryRun?, refresh? }
+GET    /v1/review/pending                       ?target=&type=&cursor=&limit=
 POST   /v1/review/decisions                     { decisions: [{ sourceDocId, targetDocId, type, occurrenceKey, action, newType? }] }
-GET    /v1/documents                            ?vault=&cursor=&limit=
-GET    /v1/documents/:id
+GET    /v1/documents                            ?cursor=&limit=
+GET    /v1/documents/:id                        # :id accepts Document.publicId or Document.id
 GET    /v1/documents/:id/content                ?section=<slug>&format=md|text|json
 GET    /v1/documents/:id/neighbors              ?type=&depth=&status=&cursor=&limit=
 GET    /v1/documents/:id/backlinks              ?cursor=&limit=
@@ -756,6 +859,9 @@ POST   /v1/summarize                            { target, force? }
 POST   /v1/verify                               # Lint scan
 GET    /v1/export                               ?format=graphml|dot|cypher|json
 ```
+
+`GET /v1/review/pending` returns the pending-edge identity tuple plus the
+source/target excerpts and rationale needed to render a review UI.
 
 ### 8.2 Cross-cutting
 
@@ -772,8 +878,9 @@ GET    /v1/export                               ?format=graphml|dot|cypher|json
 - **Rate limiting**: per-token token-bucket, configured under
   `server.rateLimit`.
 - **Idempotency**: `Idempotency-Key` header on mutating endpoints
-  (`/v1/sync`, `/v1/suggest`, `/v1/review/decisions`). Duplicate keys
-  return the previous result for `server.idempotency.ttl`.
+  (`/v1/query` when `write:true`, `/v1/sync`, `/v1/suggest`,
+  `/v1/review/decisions`, `/v1/summarize`). Duplicate keys return the
+  previous result for `server.idempotency.ttl`.
 - **Errors**: `AgdsError` → `{ code, message, details }` with a stable
   HTTP status map (`400` user, `401` auth, `403` forbidden, `404` not
   found, `409` conflict, `422` validation, `429` rate-limited, `500`
@@ -811,8 +918,9 @@ a zod schema:
 ```ts
 export default defineConfig({
   vault: {
-    // Discriminated union; additional kinds ("postgres", "mongo", "s3",
-    // "git") plug in without changes to @agds/core.
+    // Exactly one configured vault per process in v1. Additional store
+    // kinds ("postgres", "mongo", "s3", "git") plug in without changes
+    // to @agds/core.
     store: {
       kind: "fs",
       roots: ["./docs"],
@@ -898,6 +1006,9 @@ export default defineConfig({
   `apoc.create.relationship`.
 - Frontmatter fields listed in `llm.redact` are stripped before being
   sent to the LLM.
+- `agds.frozen=true` is a hard write barrier for AGDS-managed mutations:
+  `suggest`, `review`, `summarize`, and `types normalize --apply` fail or
+  skip rather than editing the document.
 - `safety.requireCleanGit` aborts document rewrites when the working
   tree is dirty. **Ignored unless the active store advertises
   `capabilities.vcs === "git"`.**
@@ -918,10 +1029,16 @@ export default defineConfig({
 - Neighborhood queries use parameterized Cypher with explicit `LIMIT`.
 - Long-running commands print structured progress events
   (`--json-logs`).
-- **Concurrency control**: `sync`, `suggest`, and `review` acquire an
-  advisory lock by upserting `(:AgdsLock {scope, holder, expiresAt})`.
-  Stale locks past `expiresAt` are reclaimed automatically. Operators
-  can force-release with `agds unlock --force`.
+- **Concurrency control**: every mutating content command (`sync`,
+  `suggest`, `review`, `summarize`, `types normalize --apply`,
+  `query --write`, `import`) acquires the shared `scope:"write"`
+  advisory lock by atomically claiming
+  `(:AgdsLock {scope, holder, acquiredAt, expiresAt})`. A live lock may
+  only be renewed or released by the current `holder`; another process
+  can steal it only after `expiresAt`. Long-running commands
+  heartbeat-renew before half the TTL elapses. `agds unlock --force`
+  defaults to `--scope write`; additional scopes are reserved for future
+  administrative flows.
 - **Cost telemetry**: every command emits a per-run summary of tokens
   consumed and estimated USD using `telemetry.cost.priceTable`.
 
@@ -958,8 +1075,17 @@ export default defineConfig({
   - edge diffing is idempotent: `sync ∘ sync = sync`;
   - `occurrenceKey` is stable across runs for unchanged content and
     stable under unrelated edits elsewhere in the document;
+  - managed-section suggestion keys remain stable when sibling
+    suggestions are accepted, rejected, inserted, or removed;
+  - managed-section suggestion keys are unique per source document even
+    when multiple candidate types are proposed for the same target;
   - rejected edges survive any number of `sync` passes with no
     document-side token;
+  - `types normalize --apply` rewrites both explicit-link tokens and
+    managed-section suggestion tokens, and a subsequent `sync` does not
+    resurrect the pre-canonical type;
+  - a rejected suggestion is not re-proposed unless `--refresh` is
+    set, even if the LLM returns the same target/type/anchor again;
   - rename detection refuses to merge when ≥2 candidates share the
     same hash, when body size `< sync.renameMinBytes`, or when
     `sync.detectRenames` is false.
@@ -968,6 +1094,11 @@ export default defineConfig({
   capability honesty checks).
 - **Read-only lookup tests** — `resolve` and `fetch` misses must not
   mutate the graph (verified by before/after Cypher snapshots).
+- **Identifier tests** — `Document.publicId` resolves before the internal
+  `Document.id`, and duplicate live `publicId`s fail sync with
+  `AGDS_DOCUMENT_PUBLIC_ID_CONFLICT`.
+- **Mutation gating tests** — `agds.frozen=true` blocks every
+  document-writing flow and surfaces a stable error/skip code.
 - **LLM tests** — recorded fixtures; live calls are opt-in via
   `AGDS_LIVE_LLM=1` and never run in CI.
 - **LLM eval harness** — `packages/evals/` runs `suggest` against a
@@ -1077,13 +1208,14 @@ telemetry.
 ### M6 — Review UX
 
 Interactive `review` with `@clack/prompts`, document promotion,
-rejection history, `types normalize`.
+rejection history, `types normalize --apply`.
 
 **Done when**:
 
 - Accepting a suggestion in `review` produces byte-equal output to the
   hand-rewritten golden file.
-- `types normalize` merges seeded synonyms into a single canonical type.
+- `types normalize --apply` merges seeded synonyms into a single
+  canonical type without the old aliases reappearing on the next `sync`.
 
 ### M7 — Advanced
 
@@ -1109,7 +1241,8 @@ release pipeline (changesets).
 
 ## 16. MCP Tool Surface
 
-Exposed tools mirror the safe **read** subset of the CLI:
+Exposed tools primarily mirror the safe **read** subset of the CLI, with
+one explicit opt-in write exception:
 
 - `agds.query` (read-only Cypher)
 - `agds.resolve`
@@ -1129,7 +1262,7 @@ exposed over MCP in M7 — they remain human-driven. The opt-in flag
 
 | Risk | L | I | Mitigation |
 |------|---|---|------------|
-| LLM mints many near-synonym relationship types | H | M | Normalization pass, alias registry, `types normalize` |
+| LLM mints many near-synonym relationship types | H | M | Normalization pass, alias registry, `types normalize --apply` |
 | False-positive rename merges from duplicate content (templates, stubs) | M | H | Prefer git rename tracking; hash fallback requires unique hash + ≥512 B + `sync.detectRenames` (§3.1.1); new+archived fallback preserves history |
 | Rename/move loses history on stores without any rename evidence | L | M | `archived=true` on disappearance preserves edges; later reappearance is treated as a new node unless rename evidence satisfies §3.1.1 |
 | Rejected suggestions resurrected by next `sync` | M | M | Sync diff scope restricted to `status IN ["active","pending"]`; rejected edges are immutable to sync (§7.1 step 4); property test |
@@ -1138,11 +1271,12 @@ exposed over MCP in M7 — they remain human-driven. The opt-in flag
 | APOC version drift across Neo4j upgrades | M | M | Pin APOC to Neo4j minor; `doctor` verifies both |
 | LLM cost runaway on large vaults | M | H | `maxConcurrency`, cache, `suggest --limit`, cost telemetry |
 | Two-store drift (graph vs documents) | M | M | Hash reconciliation on next `sync`; explicit consistency model (§4.4) |
-| Concurrent `sync` runs corrupt state | L | H | Advisory lock (§11) |
+| Concurrent mutating commands corrupt state | L | H | Shared `scope:"write"` advisory lock (§7.1, §11) |
 | Dynamic rel-type name injection | L | H | Regex validation, APOC-only dynamic writes |
 | Markdown managed-section collision | M | L | Fence markers + refuse-to-overwrite (§2.1) |
 | Prompt regression after edits | M | M | Prompt versioning + eval harness (§13) |
 | HTTP token leakage | L | H | Env-only token, loopback default, TLS guard |
+| Advisory lock races allow concurrent writers | L | H | Unique `AgdsLock.scope` constraint + compare-and-set acquisition + holder-bound renew/release (§3.4, §11) |
 
 ---
 
@@ -1183,8 +1317,6 @@ exposed over MCP in M7 — they remain human-driven. The opt-in flag
   `sync`?
 - MCP write surface: ever exposed, or CLI/HTTP only forever?
 - Multi-tenancy: explicitly out of scope, or merely deferred?
-- Should `agds.config.ts` support multiple vaults in one process, or is
-  one vault per process the simpler invariant?
 - Suggestion placement: always under the managed section, or attempt
   inline placement when the LLM provides a source paragraph anchor?
 - Per-vault encryption at rest for the LLM cache, or are filesystem
@@ -1200,3 +1332,5 @@ exposed over MCP in M7 — they remain human-driven. The opt-in flag
 - **Neo4j deployment** — Docker Compose for local; managed offerings
   (Aura) work via the same driver.
 - **`review` UX** — `@clack/prompts` (lightweight TUI), not full ink.
+- **Vault topology** — v1 is one vault per process; multi-vault support
+  is deferred.
