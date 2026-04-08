@@ -510,7 +510,7 @@ agds migrate                                    # Apply pending Neo4j schema mig
 agds sync [--vault <id>] [--target <ref>] [--since <marker>] [--dry-run] [--full]
 agds query "<cypher>"                           # Read-only Cypher (default)
 agds query --write "<cypher>"                   # Write Cypher (explicit opt-in + confirm)
-agds suggest [--target <ref>] [--since <ref>] [--limit <n>] [--dry-run]
+agds suggest [--target <ref>] [--since <ref>] [--limit <n>] [--dry-run] [--refresh]
 agds review [--target <ref>] [--type <REL>]    # Interactively accept/reject pending edges
 agds summarize <ref> [--force]                  # Refresh a document's summary
 agds resolve <link>                             # Resolve a link to a Document (JSON)
@@ -702,6 +702,8 @@ adapter advertises a `path` hint — a path string for convenience.
    `(sourceDocId, targetDocId, type, occurrenceKey)`, so multiple
    suggestions toward the same target are presented as independent
    items.
+   The HTTP API uses this same tuple directly in
+   `/v1/review/decisions`; there is no separate synthetic `edgeId`.
 2. For each, show source/target excerpts and the LLM's rationale; prompt
    accept / reject / skip / edit-type.
 3. **Accept** — rewrite the specific `[?[...]]` occurrence to `[[...]]`
@@ -741,8 +743,8 @@ GET    /v1/types                                ?cursor=&limit=
 GET    /v1/types/:name
 POST   /v1/query                                { cypher, params?, write? }
 POST   /v1/sync                                 { vault?, target?, since?, dryRun?, full? }
-POST   /v1/suggest                              { target?, since?, limit?, dryRun? }
-POST   /v1/review/decisions                     { decisions: [{ edgeId, action, type? }] }
+POST   /v1/suggest                              { target?, since?, limit?, dryRun?, refresh? }
+POST   /v1/review/decisions                     { decisions: [{ sourceDocId, targetDocId, type, occurrenceKey, action, newType? }] }
 GET    /v1/documents                            ?vault=&cursor=&limit=
 GET    /v1/documents/:id
 GET    /v1/documents/:id/content                ?section=<slug>&format=md|text|json
@@ -863,6 +865,9 @@ export default defineConfig({
     tls: null,                   // { cert, key } | null
     rateLimit: { perMinute: 120 },
     idempotency: { ttl: "24h" },
+  },
+  mcp: {
+    allowWrites: false,          // gates write-capable MCP tools such as summarize
   },
   telemetry: {
     otel: {
@@ -1126,7 +1131,7 @@ exposed over MCP in M7 — they remain human-driven. The opt-in flag
 |------|---|---|------------|
 | LLM mints many near-synonym relationship types | H | M | Normalization pass, alias registry, `types normalize` |
 | False-positive rename merges from duplicate content (templates, stubs) | M | H | Prefer git rename tracking; hash fallback requires unique hash + ≥512 B + `sync.detectRenames` (§3.1.1); new+archived fallback preserves history |
-| Rename/move loses history on stores without any rename evidence | L | M | `archived=true` on disappearance preserves edges; reappearance reuses the archived node by hash |
+| Rename/move loses history on stores without any rename evidence | L | M | `archived=true` on disappearance preserves edges; later reappearance is treated as a new node unless rename evidence satisfies §3.1.1 |
 | Rejected suggestions resurrected by next `sync` | M | M | Sync diff scope restricted to `status IN ["active","pending"]`; rejected edges are immutable to sync (§7.1 step 4); property test |
 | Multiple links between same pair collapse into one edge | M | M | Edge identity includes `occurrenceKey` (§3.2); review/diff operate per-occurrence |
 | `resolve`/`fetch` misses pollute graph with BROKEN_LINK entries | M | L | `resolve`/`fetch` strictly read-only (§7.3); BROKEN_LINK minted only by `sync` |
