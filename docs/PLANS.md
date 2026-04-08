@@ -159,13 +159,27 @@ never overwritten silently.
 
 #### 3.1.1 Identity & Rename Detection
 
-- If the active store provides a stable key (RDBMS PK, object key, Git
-  blob path), AGDS uses that key as `storeKey` and identity is fixed for
-  the lifetime of the document. Renames are free.
-- If the store does **not** provide a stable key (e.g. raw FS), AGDS
-  falls back to a content-hash heuristic: when `storeKey` changes but
-  `hash` matches an existing document, the existing node is updated in
-  place. This is the only case in which hash-based rename detection runs.
+- If the active store provides a stable key (RDBMS PK, object key,
+  inode, Git blob id), AGDS uses that key as `storeKey` and identity is
+  fixed for the lifetime of the document. Renames are free.
+- **Preferred evidence.** When the store advertises `capabilities.vcs
+  === "git"`, rename detection uses the store's native rename tracking
+  (`git log --follow` / `--diff-filter=R`), not content hashes. The FS
+  adapter inside a git working tree MUST prefer this path.
+- **Hash-based fallback.** When no stronger evidence is available (raw
+  FS, no git), AGDS may fall back to content-hash rename detection,
+  but **only** when *all* of the following hold:
+  1. exactly one existing document disappeared in this sync pass;
+  2. exactly one new `DocumentRef` appeared with the same `hash`;
+  3. the body size is at least `sync.renameMinBytes` (default 512);
+  4. the disappeared document was not `archived`.
+  Any ambiguity (multiple candidates with the same hash, tiny bodies,
+  stubs, templates, empty files) falls through to the safe
+  **new + archived** path — edges on the old node are preserved via
+  `archived=true`, and the new node starts fresh.
+- Content-hash rename detection can be disabled entirely with
+  `sync.detectRenames: false` for vaults known to contain duplicated
+  content (e.g. templates, boilerplate, frontmatter-only pages).
 
 ### 3.2 Relationships
 
@@ -188,16 +202,39 @@ property envelope:
 
 ```text
 (:Document)-[:<TYPE> {
-  source,       // "explicit" | "llm" | "user"
-  status,       // "active" | "pending" | "rejected"
-  confidence,   // 0..1, present for LLM-generated edges
-  rationale,    // short natural-language justification (LLM edges)
-  anchor,       // optional "#heading" target anchor
+  occurrenceKey, // stable per-occurrence id (see below); PART of edge identity
+  source,        // "explicit" | "llm" | "user"
+  status,        // "active" | "pending" | "rejected"
+  confidence,    // 0..1, present for LLM-generated edges
+  rationale,     // short natural-language justification (LLM edges)
+  anchor,        // optional "#heading" target anchor
   createdAt,
   updatedAt,
-  model         // LLM model id, when applicable
+  model          // LLM model id, when applicable
 }]->(:Document)
 ```
+
+**Edge identity** is the tuple
+`(sourceDocId, targetDocId, type, occurrenceKey)`, not just
+`(sourceDocId, targetDocId, type)`. This means multiple links from the
+same source to the same target with the same type are represented as
+distinct edges, so `review` can accept/reject them individually and
+`sync` can reconcile them independently.
+
+`occurrenceKey` is computed deterministically by the parser from the
+link's position in the document AST:
+
+- For explicit links in body text: a stable slug derived from
+  `(containing heading slug, block index, inline index)`.
+- For suggestions inside the managed `agds:suggested-links` fence: the
+  index within the fence, prefixed with `"sl:"`.
+- For edges minted directly (not from Markdown — e.g. an imported
+  snapshot): `"ext:" + sha1(payload)`.
+
+The parser regenerates `occurrenceKey`s on every sync; they must be
+**stable across runs** for unchanged content, and **stable under
+unrelated edits** (adding an unrelated paragraph elsewhere does not
+re-slug). Tests assert this property.
 
 Because Cypher cannot parameterize relationship type names, all dynamic
 edge writes go through `apoc.create.relationship(a, $type, $props, b)`.
@@ -567,9 +604,21 @@ adapter advertises a `path` hint — a path string for convenience.
      not, fall back to hash-based rename detection (§3.1.1).
    - **Deleted** — mark `archived=true` (default) or delete (`--full`).
 4. Edge diffing: compute the desired edge set from the AST and reconcile
-   against the current set keyed by `(source, target, type, source_kind)`.
-   Unreferenced edges from this document are removed.
-5. Unresolved targets create `BROKEN_LINK` edges to `:MissingTarget` nodes.
+   against the current set keyed by edge identity
+   `(sourceDocId, targetDocId, type, occurrenceKey)` — see §3.2.
+   **Reconciliation scope is restricted to edges with
+   `status IN ["active","pending"]` AND `source IN ["explicit","llm"]`**.
+   Edges with `status:"rejected"` are **immutable to sync**: they
+   represent historical user decisions that no longer have a
+   corresponding token in the document, and must not be re-created or
+   removed by the diff. Likewise, `source:"user"` edges created via
+   direct Cypher are out of scope for document-driven reconciliation.
+   Unreferenced edges inside the scope are removed; rejected and
+   user-authored edges survive untouched.
+5. Unresolved targets parsed from the document create `BROKEN_LINK`
+   edges to `:MissingTarget` nodes. `BROKEN_LINK` edges are **only**
+   minted by `sync` from document-origin link tokens; ad-hoc
+   `resolve`/`fetch` misses never mutate the graph (see §7.3).
 6. All graph writes for a single document happen inside one
    `executeWrite` transaction. Document-side writes go through
    `DocumentStore.write`; if the store advertises
@@ -607,8 +656,16 @@ adapter advertises a `path` hint — a path string for convenience.
    a pending edge, unless `--refresh` is set.
 5. For surviving candidates:
    - Append `[?[anchorText|TYPE](targetRef)]` inside the managed
-     `<!-- agds:suggested-links -->` fence (§2.1).
-   - Upsert the edge with `status:"pending"`.
+     `<!-- agds:suggested-links start --> … <!-- agds:suggested-links end -->`
+     fence (§2.1). If the fence is absent it is created at the end of
+     the document; if it exists but contains hand-written content,
+     abort with `AGDS_MANAGED_SECTION_CONFLICT`.
+   - Upsert the edge with `status:"pending"` and a fresh
+     `occurrenceKey` of the form `"sl:<index>"` based on its position
+     inside the fence.
+   - Skip candidates that would collide with an existing edge at the
+     same `(sourceDocId, targetDocId, type, occurrenceKey)` — the LLM
+     may regenerate identical suggestions across runs.
    - Register any new `TYPE` in `RelationType`.
 6. `--dry-run` skips both document and graph writes.
 
@@ -630,22 +687,40 @@ adapter advertises a `path` hint — a path string for convenience.
    summary). `fetch` additionally returns the body in the requested
    format. Both are exposed to the LLM so it can traverse links
    autonomously.
-5. On miss: return a structured "broken link" result and upsert a
-   `BROKEN_LINK` edge.
+5. On miss: return a structured error (`AGDS_RESOLVE_NOT_FOUND`) with
+   the normalization trail so the caller can understand which steps
+   failed. `resolve` and `fetch` are **strictly read-only**; they never
+   mutate the graph, even on miss. Persistent `BROKEN_LINK` edges are
+   created exclusively by `sync` from document-origin link tokens
+   (§7.1 step 5), so ad-hoc lookups, typos, or LLM exploration do not
+   pollute the graph.
 
 ### 7.4 `review` Flow
 
 1. Enumerate edges with `status:"pending"`, filtered by
-   `--target`/`--type`.
+   `--target`/`--type`. Each pending edge is keyed by its full identity
+   `(sourceDocId, targetDocId, type, occurrenceKey)`, so multiple
+   suggestions toward the same target are presented as independent
+   items.
 2. For each, show source/target excerpts and the LLM's rationale; prompt
    accept / reject / skip / edit-type.
-3. **Accept** — rewrite `[?[...]]` → `[[...]]` in the document, flip
-   `status` to `active`, record `updatedAt`.
-4. **Reject** — remove the `[?[...]]` token from the document, set
-   `status:"rejected"`, keep `rationale` for learning.
-5. **Edit-type** — change the edge type before acceptance; new type is
-   registered.
-6. All document rewrites are buffered and flushed atomically per document.
+3. **Accept** — rewrite the specific `[?[...]]` occurrence to `[[...]]`
+   in the document (located by `occurrenceKey`), flip the edge's
+   `status` to `active`, record `updatedAt`. Other pending suggestions
+   for the same `(source, target, type)` pair are untouched.
+4. **Reject** — remove the specific `[?[...]]` occurrence from the
+   document, set the edge's `status` to `rejected`, keep `rationale`.
+   Rejected edges survive future `sync` passes (§7.1 step 4), so the
+   same suggestion will not be re-proposed unless `suggest --refresh`
+   is passed.
+5. **Edit-type** — change the edge type before acceptance; the new
+   type is registered and the `occurrenceKey` is preserved so the
+   decision audit trail remains intact.
+6. All document rewrites are buffered and flushed atomically per
+   document. Rewrites only touch bytes inside the managed
+   `<!-- agds:suggested-links start --> … <!-- agds:suggested-links end -->`
+   fence (§2.1) or the original inline position identified by
+   `occurrenceKey`; surrounding prose is preserved byte-for-byte.
 
 ---
 
@@ -766,6 +841,10 @@ export default defineConfig({
     dimensions: null,
     cacheDir: ".agds/embeddings",
   },
+  sync: {
+    detectRenames: true,             // hash-based rename fallback (§3.1.1)
+    renameMinBytes: 512,             // minimum body size for hash-based rename
+  },
   suggest: {
     confidenceThreshold: 0.6,
     maxPerDocument: 10,
@@ -870,10 +949,20 @@ export default defineConfig({
   broken-link detection.
 - **Golden tests** — sample vault fixture under `fixtures/vault/`
   exercised end-to-end.
-- **Property tests** — edge diffing is idempotent: `sync ∘ sync = sync`.
+- **Property tests**:
+  - edge diffing is idempotent: `sync ∘ sync = sync`;
+  - `occurrenceKey` is stable across runs for unchanged content and
+    stable under unrelated edits elsewhere in the document;
+  - rejected edges survive any number of `sync` passes with no
+    document-side token;
+  - rename detection refuses to merge when ≥2 candidates share the
+    same hash, when body size `< sync.renameMinBytes`, or when
+    `sync.detectRenames` is false.
 - **DocumentStore conformance suite** — every adapter implementation
   runs the same suite (list/read/write/stat/delete/watch round-trips,
   capability honesty checks).
+- **Read-only lookup tests** — `resolve` and `fetch` misses must not
+  mutate the graph (verified by before/after Cypher snapshots).
 - **LLM tests** — recorded fixtures; live calls are opt-in via
   `AGDS_LIVE_LLM=1` and never run in CI.
 - **LLM eval harness** — `packages/evals/` runs `suggest` against a
@@ -1036,7 +1125,11 @@ exposed over MCP in M7 — they remain human-driven. The opt-in flag
 | Risk | L | I | Mitigation |
 |------|---|---|------------|
 | LLM mints many near-synonym relationship types | H | M | Normalization pass, alias registry, `types normalize` |
-| Rename/move loses history on stores without stable keys | M | H | Hash-based rename detection (§3.1.1); stable-key fast path |
+| False-positive rename merges from duplicate content (templates, stubs) | M | H | Prefer git rename tracking; hash fallback requires unique hash + ≥512 B + `sync.detectRenames` (§3.1.1); new+archived fallback preserves history |
+| Rename/move loses history on stores without any rename evidence | L | M | `archived=true` on disappearance preserves edges; reappearance reuses the archived node by hash |
+| Rejected suggestions resurrected by next `sync` | M | M | Sync diff scope restricted to `status IN ["active","pending"]`; rejected edges are immutable to sync (§7.1 step 4); property test |
+| Multiple links between same pair collapse into one edge | M | M | Edge identity includes `occurrenceKey` (§3.2); review/diff operate per-occurrence |
+| `resolve`/`fetch` misses pollute graph with BROKEN_LINK entries | M | L | `resolve`/`fetch` strictly read-only (§7.3); BROKEN_LINK minted only by `sync` |
 | APOC version drift across Neo4j upgrades | M | M | Pin APOC to Neo4j minor; `doctor` verifies both |
 | LLM cost runaway on large vaults | M | H | `maxConcurrency`, cache, `suggest --limit`, cost telemetry |
 | Two-store drift (graph vs documents) | M | M | Hash reconciliation on next `sync`; explicit consistency model (§4.4) |
