@@ -34,6 +34,8 @@ New code should cover parser behavior, document rewrite safety, and graph sync i
 
 Follow the existing history: short imperative subjects such as `Add initial AGDS implementation plan and language policy`. Add a body when context or rationale is not obvious.
 
+Unless the user explicitly requests a branch change, continue working on the current branch. Do not create a new branch by default.
+
 PRs should describe scope, link the relevant issue or plan section, and include sample CLI or HTTP output when behavior changes. Call out any config, schema, or migration impact explicitly.
 
 ## Security & Configuration Tips
