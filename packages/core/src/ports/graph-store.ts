@@ -104,6 +104,23 @@ export interface GraphStore {
   /** Return all broken-link edges whose source is the given document. */
   listBrokenLinksFrom(docId: DocumentId): Promise<BrokenLink[]>;
 
+  /** Return all heading nodes attached to the given document. */
+  listHeadingsForDocument(docId: DocumentId): Promise<Heading[]>;
+
+  /**
+   * Return heading records that are not attached to any document node.
+   *
+   * This is primarily used by integrity verification.
+   */
+  listOrphanedHeadings(): Promise<Heading[]>;
+
+  /**
+   * Return tag records that are not attached to any document node.
+   *
+   * This is primarily used by integrity verification.
+   */
+  listOrphanedTags(): Promise<Tag[]>;
+
   // ── Advisory locks ────────────────────────────────────────────────────────
 
   /**

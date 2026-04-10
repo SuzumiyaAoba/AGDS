@@ -24,6 +24,7 @@ describe("SyncService", () => {
       "001-no-frontmatter.md",
       "002-with-links.md",
       "003-with-suggestions.md",
+      "004-with-broken-link.md",
     ]) {
       const raw = readFileSync(join(FIXTURES_DIR, file), "utf8");
       store.seed(vaultId, makeBlob("fs", file, raw, `v:${file}`));
@@ -39,19 +40,19 @@ describe("SyncService", () => {
 
     const first = await service.sync();
     expect(first).toEqual({
-      scanned: 3,
-      created: 3,
+      scanned: 4,
+      created: 4,
       updated: 0,
       unchanged: 0,
       archived: 0,
       edgesUpserted: 10,
       edgesDeleted: 0,
-      brokenLinksUpserted: 0,
+      brokenLinksUpserted: 1,
       brokenLinksDeleted: 0,
     });
 
     const docs = await graph.listDocuments(vaultId);
-    expect(docs).toHaveLength(3);
+    expect(docs).toHaveLength(4);
 
     const withLinks = docs.find((doc) => doc.storeKey === "002-with-links.md");
     expect(withLinks?.title).toBe("Document With Links");
@@ -67,10 +68,10 @@ describe("SyncService", () => {
     const secondSnapshot = await snapshotGraph(graph, vaultId);
 
     expect(second).toEqual({
-      scanned: 3,
+      scanned: 4,
       created: 0,
       updated: 0,
-      unchanged: 3,
+      unchanged: 4,
       archived: 0,
       edgesUpserted: 0,
       edgesDeleted: 0,

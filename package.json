@@ -8,8 +8,8 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present run build",
-    "lint": "pnpm -r --if-present run lint",
-    "test": "pnpm -r --if-present run test"
+    "lint": "pnpm build && pnpm -r --if-present run lint",
+    "test": "pnpm build && pnpm -r --if-present run test"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

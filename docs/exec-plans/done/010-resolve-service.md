@@ -1,6 +1,6 @@
 # 010 Resolve Service
 
-> Status: Draft
+> Status: Done
 > Goal: Implement deterministic document resolution
 > Depends on: `008-sync-service.md`
 
