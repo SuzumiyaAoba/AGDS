@@ -167,6 +167,44 @@ RETURN
   r.model           AS model
 `;
 
+// ── Broken links ────────────────────────────────────────────────────────────
+
+export const UPSERT_BROKEN_LINK = `
+MATCH (src:Document {id: $sourceDocId})
+MERGE (missing:MissingTarget {ref: $rawTarget})
+MERGE (src)-[rel:BROKEN_LINK {occurrenceKey: $occurrenceKey}]->(missing)
+ON CREATE SET
+  rel.anchor      = $anchor,
+  rel.reason      = $reason,
+  rel.createdAt   = $createdAt,
+  rel.updatedAt   = $updatedAt
+ON MATCH SET
+  rel.anchor      = $anchor,
+  rel.reason      = $reason,
+  rel.updatedAt   = $updatedAt
+RETURN rel
+`;
+
+export const DELETE_BROKEN_LINK = `
+MATCH ()-[r:BROKEN_LINK {occurrenceKey: $occurrenceKey}]->(missing:MissingTarget)
+DELETE r
+WITH missing
+WHERE NOT EXISTS { MATCH ()-[:BROKEN_LINK]->(missing) }
+DELETE missing
+`;
+
+export const LIST_BROKEN_LINKS_FROM = `
+MATCH (src:Document {id: $docId})-[r:BROKEN_LINK]->(missing:MissingTarget)
+RETURN
+  r.occurrenceKey AS occurrenceKey,
+  src.id          AS sourceDocId,
+  missing.ref     AS rawTarget,
+  r.anchor        AS anchor,
+  r.reason        AS reason,
+  r.createdAt     AS createdAt,
+  r.updatedAt     AS updatedAt
+`;
+
 // ── Advisory locks ────────────────────────────────────────────────────────────
 
 export const ACQUIRE_LOCK = `

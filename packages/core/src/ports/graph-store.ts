@@ -1,4 +1,5 @@
 import type { Document } from "../types/document.js";
+import type { BrokenLink } from "../types/broken-link.js";
 import type { SemanticEdge } from "../types/edge.js";
 import type { Heading } from "../types/heading.js";
 import type { DocumentId, OccurrenceKey, PublicId } from "../types/identity.js";
@@ -88,6 +89,20 @@ export interface GraphStore {
 
   /** Return all semantic edges whose target is the given document. */
   listEdgesTo(docId: DocumentId): Promise<SemanticEdge[]>;
+
+  // ── Broken links ──────────────────────────────────────────────────────────
+
+  /**
+   * Insert or update a broken-link edge.
+   * Identity is determined by (sourceDocId, rawTarget, occurrenceKey).
+   */
+  upsertBrokenLink(link: BrokenLink): Promise<void>;
+
+  /** Remove a broken-link edge by its occurrenceKey. No-op if not found. */
+  deleteBrokenLink(occurrenceKey: OccurrenceKey): Promise<void>;
+
+  /** Return all broken-link edges whose source is the given document. */
+  listBrokenLinksFrom(docId: DocumentId): Promise<BrokenLink[]>;
 
   // ── Advisory locks ────────────────────────────────────────────────────────
 

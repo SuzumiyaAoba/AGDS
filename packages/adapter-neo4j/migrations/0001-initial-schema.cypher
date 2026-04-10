@@ -6,6 +6,7 @@ CREATE CONSTRAINT doc_storekey IF NOT EXISTS FOR (d:Document)     REQUIRE (d.vau
 CREATE CONSTRAINT heading_id   IF NOT EXISTS FOR (h:Heading)      REQUIRE h.id   IS UNIQUE;
 CREATE CONSTRAINT tag_name     IF NOT EXISTS FOR (t:Tag)          REQUIRE t.name IS UNIQUE;
 CREATE CONSTRAINT reltype_name IF NOT EXISTS FOR (r:RelationType) REQUIRE r.name IS UNIQUE;
+CREATE CONSTRAINT missing_ref  IF NOT EXISTS FOR (m:MissingTarget) REQUIRE m.ref IS UNIQUE;
 CREATE CONSTRAINT meta_key     IF NOT EXISTS FOR (m:AgdsMeta)     REQUIRE m.key  IS UNIQUE;
 CREATE CONSTRAINT lock_scope   IF NOT EXISTS FOR (l:AgdsLock)     REQUIRE l.scope IS UNIQUE;
 CREATE INDEX      doc_title    IF NOT EXISTS FOR (d:Document)     ON (d.title);

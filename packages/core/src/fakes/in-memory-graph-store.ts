@@ -1,4 +1,5 @@
 import { AgdsError } from "../errors/agds-error.js";
+import type { BrokenLink } from "../types/broken-link.js";
 import type { Document } from "../types/document.js";
 import type { SemanticEdge } from "../types/edge.js";
 import type { Heading } from "../types/heading.js";
@@ -31,11 +32,13 @@ export class InMemoryGraphStore implements GraphStore {
   private readonly headings = new Map<DocumentId, Heading[]>();
   private readonly tags = new Map<DocumentId, Tag[]>();
   private readonly edges = new Map<OccurrenceKey, SemanticEdge>();
+  private readonly brokenLinks = new Map<OccurrenceKey, BrokenLink>();
   private readonly locks = new Map<string, LockEntry>();
 
   // ── Document ──────────────────────────────────────────────────────────────
 
   async upsertDocument(doc: Document): Promise<void> {
+    const previous = this.documents.get(doc.id);
     this.documents.set(doc.id, doc);
 
     // Update ref index
@@ -52,12 +55,15 @@ export class InMemoryGraphStore implements GraphStore {
     byKey.set(doc.storeKey, doc.id);
 
     // Update publicId index
+    let byVault = this.publicIdIndex.get(doc.vaultId);
+    if (byVault === undefined) {
+      byVault = new Map();
+      this.publicIdIndex.set(doc.vaultId, byVault);
+    }
+    if (previous?.publicId !== undefined && previous.publicId !== doc.publicId) {
+      byVault.delete(previous.publicId);
+    }
     if (doc.publicId !== undefined) {
-      let byVault = this.publicIdIndex.get(doc.vaultId);
-      if (byVault === undefined) {
-        byVault = new Map();
-        this.publicIdIndex.set(doc.vaultId, byVault);
-      }
       const existing = byVault.get(doc.publicId);
       if (existing !== undefined && existing !== doc.id) {
         throw AgdsError.publicIdConflict(existing, doc.publicId);
@@ -69,6 +75,9 @@ export class InMemoryGraphStore implements GraphStore {
   async archiveDocument(id: DocumentId): Promise<void> {
     const doc = this.documents.get(id);
     if (doc === undefined) return;
+    if (doc.publicId !== undefined) {
+      this.publicIdIndex.get(doc.vaultId)?.delete(doc.publicId);
+    }
     this.documents.set(id, { ...doc, archived: true });
   }
 
@@ -148,6 +157,24 @@ export class InMemoryGraphStore implements GraphStore {
     return results;
   }
 
+  // ── Broken links ──────────────────────────────────────────────────────────
+
+  async upsertBrokenLink(link: BrokenLink): Promise<void> {
+    this.brokenLinks.set(link.occurrenceKey, link);
+  }
+
+  async deleteBrokenLink(occurrenceKey: OccurrenceKey): Promise<void> {
+    this.brokenLinks.delete(occurrenceKey);
+  }
+
+  async listBrokenLinksFrom(docId: DocumentId): Promise<BrokenLink[]> {
+    const results: BrokenLink[] = [];
+    for (const link of this.brokenLinks.values()) {
+      if (link.sourceDocId === docId) results.push(link);
+    }
+    return results;
+  }
+
   // ── Advisory locks ────────────────────────────────────────────────────────
 
   async acquireLock(
@@ -195,5 +222,12 @@ export class InMemoryGraphStore implements GraphStore {
   /** Return the tags stored for a document (for test assertions). */
   getTags(docId: DocumentId): Tag[] {
     return this.tags.get(docId) ?? [];
+  }
+
+  /** Return the broken links stored for a document (for test assertions). */
+  getBrokenLinks(docId: DocumentId): BrokenLink[] {
+    return [...this.brokenLinks.values()].filter(
+      (link) => link.sourceDocId === docId,
+    );
   }
 }
