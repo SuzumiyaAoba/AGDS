@@ -1,6 +1,6 @@
 # 003 Core Domain And Errors
 
-> Status: Draft
+> Status: Done
 > Goal: Define stable core domain types and error codes
 > Depends on: `002-package-skeletons.md`
 

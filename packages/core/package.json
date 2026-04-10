@@ -12,10 +12,10 @@
   "scripts": {
     "build": "tsc --build",
     "lint": "tsc --noEmit",
-    "test": "echo 'no tests yet'"
+    "test": "vitest run"
   },
   "files": ["dist"],
-  "dependencies": {
-    "@agds/schema": "workspace:*"
+  "devDependencies": {
+    "@types/node": "^22.0.0"
   }
 }
