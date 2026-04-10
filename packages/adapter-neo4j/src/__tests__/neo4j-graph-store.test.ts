@@ -45,7 +45,7 @@ function makeDocument(seed: string): Document {
     updatedAt: new Date(),
     archived: false,
     schemaVersion: 1,
-  } as Document;
+  };
 }
 
 describe.skipIf(!LIVE)("Neo4jGraphStore (live)", () => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OccurrenceKey } from "../types/identity.js";
+import { toOccurrenceKey, type OccurrenceKey } from "../types/identity.js";
 
 function sha1hex(input: string): string {
   return createHash("sha1").update(input, "utf8").digest("hex");
@@ -43,7 +43,7 @@ export function makeExplicitOccurrenceKey(
     anchor ?? "",
     String(nthOccurrence),
   ].join("\0");
-  return `ex:${sha1hex(payload)}` as OccurrenceKey;
+  return toOccurrenceKey(`ex:${sha1hex(payload)}`);
 }
 
 /**
@@ -67,7 +67,7 @@ export function makeManagedSuggestionOccurrenceKey(
     normalizeAnchorText(anchorText),
     anchor ?? "",
   ].join("\0");
-  return `sl:${sha1hex(payload)}` as OccurrenceKey;
+  return toOccurrenceKey(`sl:${sha1hex(payload)}`);
 }
 
 /**
@@ -77,5 +77,5 @@ export function makeManagedSuggestionOccurrenceKey(
  * @param payload  Arbitrary string uniquely identifying the external edge.
  */
 export function makeExternalOccurrenceKey(payload: string): OccurrenceKey {
-  return `ext:${sha1hex(payload)}` as OccurrenceKey;
+  return toOccurrenceKey(`ext:${sha1hex(payload)}`);
 }

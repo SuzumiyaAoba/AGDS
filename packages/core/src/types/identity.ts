@@ -8,10 +8,15 @@ export type DocumentId = string & { readonly [__documentId]: never };
 export type PublicId = string & { readonly [__publicId]: never };
 export type OccurrenceKey = string & { readonly [__occurrenceKey]: never };
 
+/** Wraps a raw string as a DocumentId (validation happens at the boundary). */
+export function toDocumentId(raw: string): DocumentId {
+  return raw as DocumentId;
+}
+
 /** Creates a stable 16-hex-char DocumentId from vaultId and storeKey. */
 export function createDocumentId(vaultId: string, storeKey: string): DocumentId {
   const raw = `${vaultId}:${storeKey}`;
-  return createHash("sha1").update(raw).digest("hex").slice(0, 16) as DocumentId;
+  return toDocumentId(createHash("sha1").update(raw).digest("hex").slice(0, 16));
 }
 
 /** Wraps a raw string as a PublicId (no transformation). */

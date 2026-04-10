@@ -98,8 +98,8 @@ export class SyncService {
       brokenLinksDeleted: 0,
     };
     const existingDocs = await this.graph.listDocuments(this.vaultId);
-    const existingByStoreKey = new Map(
-      existingDocs.map((doc) => [doc.storeKey, doc] as const),
+    const existingByStoreKey = new Map<string, Document>(
+      existingDocs.map((doc): [string, Document] => [doc.storeKey, doc]),
     );
     const seenStoreKeys = new Set<string>();
     const prepared: PreparedSyncDocument[] = [];
@@ -209,11 +209,11 @@ export class SyncService {
       item.document.id,
     );
 
-    const currentEdgesByKey = new Map(
-      currentEdges.map((edge) => [edge.occurrenceKey, edge] as const),
+    const currentEdgesByKey = new Map<string, SemanticEdge>(
+      currentEdges.map((edge): [string, SemanticEdge] => [edge.occurrenceKey, edge]),
     );
-    const currentBrokenLinksByKey = new Map(
-      currentBrokenLinks.map((link) => [link.occurrenceKey, link] as const),
+    const currentBrokenLinksByKey = new Map<string, BrokenLink>(
+      currentBrokenLinks.map((link): [string, BrokenLink] => [link.occurrenceKey, link]),
     );
     const desiredEdges = new Map<string, SemanticEdge>();
     const desiredBrokenLinks = new Map<string, BrokenLink>();
