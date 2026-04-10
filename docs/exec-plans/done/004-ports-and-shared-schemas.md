@@ -1,6 +1,6 @@
 # 004 Ports And Shared Schemas
 
-> Status: Draft
+> Status: Done
 > Goal: Define adapter contracts and shared zod shapes
 > Depends on: `003-core-domain-and-errors.md`
 
