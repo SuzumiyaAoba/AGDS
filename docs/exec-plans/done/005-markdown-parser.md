@@ -1,6 +1,6 @@
 # 005 Markdown Parser
 
-> Status: Draft
+> Status: Done
 > Goal: Parse AGDS Markdown syntax deterministically
 > Depends on: `004-ports-and-shared-schemas.md`
 
