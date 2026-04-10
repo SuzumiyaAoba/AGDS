@@ -13,3 +13,20 @@ export type {
   ResolveResult,
   ResolveServiceOptions,
 } from "./resolve-service.js";
+export { FetchService } from "./fetch-service.js";
+export type {
+  FetchFormat,
+  FetchOptions,
+  FetchResult,
+  FetchServiceOptions,
+} from "./fetch-service.js";
+export { NavigationService } from "./navigation-service.js";
+export type {
+  BacklinkResult,
+  EdgeStatusFilter,
+  NeighborResult,
+  NeighborsOptions,
+  NavigationServiceOptions,
+} from "./navigation-service.js";
+export { QueryService } from "./query-service.js";
+export type { QueryOptions, QueryServiceOptions } from "./query-service.js";

@@ -46,6 +46,14 @@ export class AgdsError extends Error {
     );
   }
 
+  static queryWriteForbidden(cypher: string): AgdsError {
+    return new AgdsError(
+      "QUERY_WRITE_FORBIDDEN",
+      "Write Cypher is not allowed in read-only query mode. Pass { write: true } to opt in.",
+      { cypher },
+    );
+  }
+
   static resolveNotFound(ref: string, trail: readonly string[]): AgdsError {
     return new AgdsError(
       "RESOLVE_NOT_FOUND",
