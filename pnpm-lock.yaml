@@ -12,6 +12,38 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/adapter-neo4j:
+    dependencies:
+      '@agds/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-store-fs:
+    dependencies:
+      '@agds/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/cli:
+    dependencies:
+      '@agds/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+
+  packages/core:
+    dependencies:
+      '@agds/schema':
+        specifier: workspace:*
+        version: link:../schema
+
+  packages/runtime:
+    dependencies:
+      '@agds/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/schema: {}
+
 packages:
 
   typescript@5.9.3:
