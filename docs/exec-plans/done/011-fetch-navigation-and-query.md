@@ -1,6 +1,6 @@
 # 011 Fetch Navigation And Query
 
-> Status: Draft
+> Status: Done
 > Goal: Expose read-only content retrieval and graph navigation
 > Depends on: `010-resolve-service.md`
 
