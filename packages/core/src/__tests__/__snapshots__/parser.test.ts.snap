@@ -1,0 +1,20 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden snapshot > 002-with-links.md produces a stable link list 1`] = `
+[
+  "ex:2580cd643f00817b7cd6f53a9b6f11bc774939d2",
+  "ex:0b2664a36549c10134efb7343c812b9e4476b75f",
+  "ex:e683faae2e4925813e5d851d98afc9bd83543e99",
+  "ex:5d34f95994f30974294ea3263e64635180b7418a",
+  "ex:9713fe9c1120116449e2c7794437fd4c73d7291a",
+  "ex:4cee40a0e7ead8f8a10906a7a034d4d5d041dbd9",
+  "sl:62ed801b6884d29a6624fe3daf987079d5e441ed",
+  "sl:97868dd7497697ce2f7ed0eac94f086e288eee38",
+]
+`;
+
+exports[`golden snapshot > 003-with-suggestions.md produces a stable link list 1`] = `
+[
+  "sl:24605c78d4b244d493f37fcaa83cd965ed255da2",
+]
+`;
