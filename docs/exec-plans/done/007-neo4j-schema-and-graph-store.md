@@ -1,6 +1,6 @@
 # 007 Neo4j Schema And Graph Store
 
-> Status: Draft
+> Status: Done
 > Goal: Implement the first real `GraphStore`
 > Depends on: `004-ports-and-shared-schemas.md`
 
