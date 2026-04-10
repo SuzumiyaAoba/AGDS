@@ -12,10 +12,17 @@
   "scripts": {
     "build": "tsc --build",
     "lint": "tsc --noEmit",
-    "test": "echo 'no tests yet'"
+    "test": "vitest run"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
-    "@agds/core": "workspace:*"
+    "@agds/core": "workspace:*",
+    "neo4j-driver": "^6.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^3.2.0"
   }
 }
