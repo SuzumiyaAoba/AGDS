@@ -5,6 +5,7 @@ export type {
 } from "./identity.js";
 export {
   createDocumentId,
+  toDocumentId,
   toPublicId,
   toOccurrenceKey,
 } from "./identity.js";

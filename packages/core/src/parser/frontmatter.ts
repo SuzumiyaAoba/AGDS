@@ -1,4 +1,5 @@
 import { parse as parseYaml } from "yaml";
+import { z } from "zod";
 import type { AgdsFrontmatter } from "./types.js";
 
 export interface FrontmatterResult {
@@ -14,6 +15,20 @@ export interface FrontmatterResult {
 }
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const FrontmatterRecordSchema = z.record(z.string(), z.unknown());
+const AgdsFrontmatterSchema = z.object({
+  id: z.string().optional(),
+  tags: z.preprocess(
+    (value: unknown) =>
+      Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : value,
+    z.array(z.string()).optional(),
+  ),
+  summary: z.string().optional(),
+  doNotSuggest: z.boolean().optional(),
+  frozen: z.boolean().optional(),
+});
 
 /**
  * Extract and parse YAML frontmatter from a Markdown document.
@@ -40,8 +55,9 @@ export function extractFrontmatter(raw: string): FrontmatterResult {
   let parsed: Record<string, unknown> = {};
   try {
     const result = parseYaml(yamlBlock);
-    if (result !== null && typeof result === "object" && !Array.isArray(result)) {
-      parsed = result as Record<string, unknown>;
+    const validated = FrontmatterRecordSchema.safeParse(result);
+    if (validated.success) {
+      parsed = validated.data;
     }
   } catch {
     // Malformed frontmatter: treat as empty and pass the raw block through.
@@ -60,19 +76,18 @@ export function extractFrontmatter(raw: string): FrontmatterResult {
 }
 
 function parseAgdsFrontmatter(raw: unknown): AgdsFrontmatter {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+  const parsed = AgdsFrontmatterSchema.safeParse(raw);
+  if (!parsed.success) {
     return {};
   }
-  const src = raw as Record<string, unknown>;
+
   const result: AgdsFrontmatter = {};
-
-  if (typeof src["id"] === "string") result.id = src["id"];
-  if (Array.isArray(src["tags"])) {
-    result.tags = src["tags"].filter((t): t is string => typeof t === "string");
+  if (parsed.data.id !== undefined) result.id = parsed.data.id;
+  if (parsed.data.tags !== undefined) result.tags = parsed.data.tags;
+  if (parsed.data.summary !== undefined) result.summary = parsed.data.summary;
+  if (parsed.data.doNotSuggest !== undefined) {
+    result.doNotSuggest = parsed.data.doNotSuggest;
   }
-  if (typeof src["summary"] === "string") result.summary = src["summary"];
-  if (typeof src["doNotSuggest"] === "boolean") result.doNotSuggest = src["doNotSuggest"];
-  if (typeof src["frozen"] === "boolean") result.frozen = src["frozen"];
-
+  if (parsed.data.frozen !== undefined) result.frozen = parsed.data.frozen;
   return result;
 }

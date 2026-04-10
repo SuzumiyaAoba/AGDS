@@ -40,7 +40,7 @@ export function extractHeadings(body: string, docId: DocumentId): Heading[] {
 
   HEADING_RE.lastIndex = 0;
   while ((match = HEADING_RE.exec(body)) !== null) {
-    const level = (match[1] ?? "").length as 1 | 2 | 3 | 4 | 5 | 6;
+    const level = toHeadingLevel((match[1] ?? "").length);
     const text = (match[2] ?? "").trim();
     const rawSlug = slugify(text);
 
@@ -60,4 +60,18 @@ export function extractHeadings(body: string, docId: DocumentId): Heading[] {
   }
 
   return headings;
+}
+
+function toHeadingLevel(value: number): Heading["level"] {
+  switch (value) {
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 5:
+    case 6:
+      return value;
+    default:
+      return 1;
+  }
 }

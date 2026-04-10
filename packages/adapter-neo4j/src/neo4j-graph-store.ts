@@ -1,4 +1,9 @@
 import neo4j, { type Driver, type Session } from "neo4j-driver";
+import { z } from "zod";
+import {
+  DocumentSchema,
+  SemanticEdgeSchema,
+} from "@agds/schema";
 import type {
   BrokenLink,
   Document,
@@ -10,7 +15,11 @@ import type {
   SemanticEdge,
   Tag,
 } from "@agds/core";
-import { AgdsError } from "@agds/core";
+import {
+  AgdsError,
+  toOccurrenceKey,
+  toPublicId,
+} from "@agds/core";
 import * as Q from "./cypher.js";
 
 export interface Neo4jGraphStoreOptions {
@@ -21,6 +30,79 @@ export interface Neo4jGraphStoreOptions {
   /** Neo4j database name. Defaults to `"neo4j"`. */
   database?: string;
 }
+
+const IsoDateStringSchema = z
+  .string()
+  .datetime({ offset: true })
+  .transform((value) => new Date(value));
+
+const OptionalStringSchema = z.preprocess(
+  (value: unknown) => (value === null ? undefined : value),
+  z.string().optional(),
+);
+
+const OptionalNumberSchema = z.preprocess(
+  (value: unknown) => (value === null ? undefined : value),
+  z.number().optional(),
+);
+
+const Neo4jIntegerSchema = z.preprocess((value: unknown) => {
+  if (hasToNumber(value)) {
+    return value.toNumber();
+  }
+  return value;
+}, z.number());
+
+const Neo4jNodePropertiesSchema = z.record(z.string(), z.unknown());
+
+const ParsedNeo4jDocumentSchema = z.object({
+  id: z.string().length(16),
+  publicId: OptionalStringSchema,
+  vaultId: DocumentSchema.shape.vaultId,
+  storeId: DocumentSchema.shape.storeId,
+  storeKey: DocumentSchema.shape.storeKey,
+  path: OptionalStringSchema,
+  title: DocumentSchema.shape.title,
+  hash: DocumentSchema.shape.hash,
+  bytes: Neo4jIntegerSchema.pipe(z.number().int().nonnegative()),
+  storeVersion: DocumentSchema.shape.storeVersion,
+  updatedAt: IsoDateStringSchema,
+  summary: OptionalStringSchema,
+  archived: z.boolean(),
+  schemaVersion: Neo4jIntegerSchema.pipe(z.number().int().nonnegative()),
+});
+
+const ParsedNeo4jSemanticEdgeSchema = z.object({
+  occurrenceKey: z.string().min(1),
+  sourceDocId: z.string().length(16),
+  targetDocId: z.string().length(16),
+  type: SemanticEdgeSchema.shape.type,
+  source: SemanticEdgeSchema.shape.source,
+  status: SemanticEdgeSchema.shape.status,
+  confidence: OptionalNumberSchema.pipe(
+    z.number().min(0).max(1).optional(),
+  ),
+  rationale: OptionalStringSchema,
+  anchor: OptionalStringSchema,
+  createdAt: IsoDateStringSchema,
+  updatedAt: IsoDateStringSchema,
+  model: OptionalStringSchema,
+});
+
+const ParsedNeo4jBrokenLinkSchema = z.object({
+  occurrenceKey: z.string().min(1),
+  sourceDocId: z.string().length(16),
+  rawTarget: z.string(),
+  anchor: OptionalStringSchema,
+  reason: z.string().min(1),
+  createdAt: IsoDateStringSchema,
+  updatedAt: IsoDateStringSchema,
+});
+
+const LockRecordSchema = z.object({
+  holder: z.string().min(1),
+  expiresAt: IsoDateStringSchema,
+});
 
 /**
  * Neo4j-backed implementation of `GraphStore`.
@@ -48,7 +130,7 @@ export class Neo4jGraphStore implements GraphStore {
     const session = this.readSession();
     try {
       const result = await session.run(Q.CHECK_APOC);
-      const version = result.records[0]?.get("version") as string;
+      const version = z.string().min(1).parse(result.records[0]?.get("version"));
       return { apocVersion: version };
     } finally {
       await session.close();
@@ -289,8 +371,10 @@ export class Neo4jGraphStore implements GraphStore {
       });
       const record = result.records[0];
       if (record === undefined) return;
-      const actualHolder = record.get("holder") as string;
-      const actualExpiry = new Date(record.get("expiresAt") as string);
+      const { holder: actualHolder, expiresAt: actualExpiry } = LockRecordSchema.parse({
+        holder: record.get("holder"),
+        expiresAt: record.get("expiresAt"),
+      });
       if (actualHolder !== holder && actualExpiry > now) {
         throw AgdsError.lockConflict(scope, actualHolder);
       }
@@ -337,64 +421,104 @@ export class Neo4jGraphStore implements GraphStore {
 // ── Record mappers ────────────────────────────────────────────────────────────
 
 function recordToDocument(node: { properties: Record<string, unknown> }): Document {
-  const p = node.properties;
-  return {
-    id: p["id"] as DocumentId,
-    publicId: (p["publicId"] as string | null) ?? undefined,
-    vaultId: p["vaultId"] as string,
-    storeId: p["storeId"] as string,
-    storeKey: p["storeKey"] as string,
-    path: (p["path"] as string | null) ?? undefined,
-    title: p["title"] as string,
-    hash: p["hash"] as string,
-    bytes: toNumber(p["bytes"]),
-    storeVersion: p["storeVersion"] as string,
-    updatedAt: new Date(p["updatedAt"] as string),
-    summary: (p["summary"] as string | null) ?? undefined,
-    archived: p["archived"] as boolean,
-    schemaVersion: toNumber(p["schemaVersion"]),
-  } as Document;
+  const properties = Neo4jNodePropertiesSchema.parse(node.properties);
+  const parsed = ParsedNeo4jDocumentSchema.parse({
+    id: properties["id"],
+    publicId: properties["publicId"],
+    vaultId: properties["vaultId"],
+    storeId: properties["storeId"],
+    storeKey: properties["storeKey"],
+    path: properties["path"],
+    title: properties["title"],
+    hash: properties["hash"],
+    bytes: properties["bytes"],
+    storeVersion: properties["storeVersion"],
+    updatedAt: properties["updatedAt"],
+    summary: properties["summary"],
+    archived: properties["archived"],
+    schemaVersion: properties["schemaVersion"],
+  });
+  const document: Document = {
+    id: wrapDocumentId(parsed.id),
+    vaultId: parsed.vaultId,
+    storeId: parsed.storeId,
+    storeKey: parsed.storeKey,
+    title: parsed.title,
+    hash: parsed.hash,
+    bytes: parsed.bytes,
+    storeVersion: parsed.storeVersion,
+    updatedAt: parsed.updatedAt,
+    archived: parsed.archived,
+    schemaVersion: parsed.schemaVersion,
+  };
+  if (parsed.publicId !== undefined) document.publicId = toPublicId(parsed.publicId);
+  if (parsed.path !== undefined) document.path = parsed.path;
+  if (parsed.summary !== undefined) document.summary = parsed.summary;
+  return document;
 }
 
 function recordToEdge(record: { get: (key: string) => unknown }): SemanticEdge {
-  return {
-    occurrenceKey: record.get("occurrenceKey") as OccurrenceKey,
-    sourceDocId: record.get("sourceDocId") as DocumentId,
-    targetDocId: record.get("targetDocId") as DocumentId,
-    type: record.get("type") as string,
-    source: record.get("source") as SemanticEdge["source"],
-    status: record.get("status") as SemanticEdge["status"],
-    confidence: (record.get("confidence") as number | null) ?? undefined,
-    rationale: (record.get("rationale") as string | null) ?? undefined,
-    anchor: (record.get("anchor") as string | null) ?? undefined,
-    createdAt: new Date(record.get("createdAt") as string),
-    updatedAt: new Date(record.get("updatedAt") as string),
-    model: (record.get("model") as string | null) ?? undefined,
-  } as SemanticEdge;
+  const parsed = ParsedNeo4jSemanticEdgeSchema.parse({
+    occurrenceKey: record.get("occurrenceKey"),
+    sourceDocId: record.get("sourceDocId"),
+    targetDocId: record.get("targetDocId"),
+    type: record.get("type"),
+    source: record.get("source"),
+    status: record.get("status"),
+    confidence: record.get("confidence"),
+    rationale: record.get("rationale"),
+    anchor: record.get("anchor"),
+    createdAt: record.get("createdAt"),
+    updatedAt: record.get("updatedAt"),
+    model: record.get("model"),
+  });
+  const edge: SemanticEdge = {
+    occurrenceKey: toOccurrenceKey(parsed.occurrenceKey),
+    sourceDocId: wrapDocumentId(parsed.sourceDocId),
+    targetDocId: wrapDocumentId(parsed.targetDocId),
+    type: parsed.type,
+    source: parsed.source,
+    status: parsed.status,
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
+  };
+  if (parsed.confidence !== undefined) edge.confidence = parsed.confidence;
+  if (parsed.rationale !== undefined) edge.rationale = parsed.rationale;
+  if (parsed.anchor !== undefined) edge.anchor = parsed.anchor;
+  if (parsed.model !== undefined) edge.model = parsed.model;
+  return edge;
 }
 
 function recordToBrokenLink(record: { get: (key: string) => unknown }): BrokenLink {
+  const parsed = ParsedNeo4jBrokenLinkSchema.parse({
+    occurrenceKey: record.get("occurrenceKey"),
+    sourceDocId: record.get("sourceDocId"),
+    rawTarget: record.get("rawTarget"),
+    anchor: record.get("anchor"),
+    reason: record.get("reason"),
+    createdAt: record.get("createdAt"),
+    updatedAt: record.get("updatedAt"),
+  });
   const link: BrokenLink = {
-    occurrenceKey: record.get("occurrenceKey") as OccurrenceKey,
-    sourceDocId: record.get("sourceDocId") as DocumentId,
-    rawTarget: record.get("rawTarget") as string,
-    reason: record.get("reason") as string,
-    createdAt: new Date(record.get("createdAt") as string),
-    updatedAt: new Date(record.get("updatedAt") as string),
+    occurrenceKey: toOccurrenceKey(parsed.occurrenceKey),
+    sourceDocId: wrapDocumentId(parsed.sourceDocId),
+    rawTarget: parsed.rawTarget,
+    reason: parsed.reason,
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
   };
-  const anchor = (record.get("anchor") as string | null) ?? undefined;
-  if (anchor !== undefined) {
-    link.anchor = anchor;
-  }
+  if (parsed.anchor !== undefined) link.anchor = parsed.anchor;
   return link;
 }
 
-function toNumber(v: unknown): number {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === "number") return v;
-  // neo4j-driver Integer type
-  if (typeof v === "object" && "toNumber" in v) {
-    return (v as { toNumber(): number }).toNumber();
-  }
-  return Number(v);
+function wrapDocumentId(raw: string): DocumentId {
+  return raw as DocumentId;
+}
+
+function hasToNumber(value: unknown): value is { toNumber(): number } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "toNumber") === "function"
+  );
 }

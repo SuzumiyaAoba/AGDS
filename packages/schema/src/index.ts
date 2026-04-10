@@ -23,6 +23,9 @@ export {
 } from "./edge.js";
 export type { EdgeSource, EdgeStatus, SemanticEdge } from "./edge.js";
 
+export { BrokenLinkSchema } from "./broken-link.js";
+export type { BrokenLink } from "./broken-link.js";
+
 export {
   SyncOptionsSchema,
   SyncErrorSchema,

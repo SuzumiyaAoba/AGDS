@@ -1,4 +1,5 @@
 import type { Heading } from "../types/heading.js";
+import { z } from "zod";
 import type { ParsedLink } from "./types.js";
 import {
   makeExplicitOccurrenceKey,
@@ -23,6 +24,12 @@ const MANAGED_END_RE = /<!--\s*agds:suggested-links\s+end\s*-->/;
  */
 const LINK_TOKEN_RE =
   /\[(?<kind>\??)\[(?<anchor>[^\]|]*?)(?:\|(?<type>[A-Z][A-Z0-9_]{0,63}))?\]\((?<target>[^)]*)\)\]/g;
+const LinkTokenGroupsSchema = z.object({
+  kind: z.string(),
+  anchor: z.string().optional(),
+  type: z.string().optional(),
+  target: z.string().optional(),
+});
 
 /**
  * Determine the slug of the heading section that contains a byte offset.
@@ -103,13 +110,12 @@ export function extractLinks(
   let match: RegExpExecArray | null;
 
   while ((match = LINK_TOKEN_RE.exec(body)) !== null) {
-    const { kind, anchor: anchorText = "", type: rawType, target: rawTarget = "" } =
-      match.groups as {
-        kind: string;
-        anchor?: string;
-        type?: string;
-        target?: string;
-      };
+    const {
+      kind,
+      anchor: anchorText = "",
+      type: rawType,
+      target: rawTarget = "",
+    } = LinkTokenGroupsSchema.parse(match.groups ?? {});
 
     const isSuggestion = kind === "?";
     const offset = match.index;
