@@ -1,5 +1,6 @@
 import neo4j, { type Driver, type Session } from "neo4j-driver";
 import type {
+  BrokenLink,
   Document,
   DocumentId,
   GraphStore,
@@ -234,6 +235,44 @@ export class Neo4jGraphStore implements GraphStore {
     }
   }
 
+  // ── Broken links ──────────────────────────────────────────────────────────
+
+  async upsertBrokenLink(link: BrokenLink): Promise<void> {
+    const session = this.writeSession();
+    try {
+      await session.run(Q.UPSERT_BROKEN_LINK, {
+        occurrenceKey: link.occurrenceKey,
+        sourceDocId: link.sourceDocId,
+        rawTarget: link.rawTarget,
+        anchor: link.anchor ?? null,
+        reason: link.reason,
+        createdAt: link.createdAt.toISOString(),
+        updatedAt: link.updatedAt.toISOString(),
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async deleteBrokenLink(occurrenceKey: OccurrenceKey): Promise<void> {
+    const session = this.writeSession();
+    try {
+      await session.run(Q.DELETE_BROKEN_LINK, { occurrenceKey });
+    } finally {
+      await session.close();
+    }
+  }
+
+  async listBrokenLinksFrom(docId: DocumentId): Promise<BrokenLink[]> {
+    const session = this.readSession();
+    try {
+      const result = await session.run(Q.LIST_BROKEN_LINKS_FROM, { docId });
+      return result.records.map(recordToBrokenLink);
+    } finally {
+      await session.close();
+    }
+  }
+
   // ── Advisory locks ────────────────────────────────────────────────────────
 
   async acquireLock(scope: string, holder: string, ttlMs: number): Promise<void> {
@@ -332,6 +371,22 @@ function recordToEdge(record: { get: (key: string) => unknown }): SemanticEdge {
     updatedAt: new Date(record.get("updatedAt") as string),
     model: (record.get("model") as string | null) ?? undefined,
   } as SemanticEdge;
+}
+
+function recordToBrokenLink(record: { get: (key: string) => unknown }): BrokenLink {
+  const link: BrokenLink = {
+    occurrenceKey: record.get("occurrenceKey") as OccurrenceKey,
+    sourceDocId: record.get("sourceDocId") as DocumentId,
+    rawTarget: record.get("rawTarget") as string,
+    reason: record.get("reason") as string,
+    createdAt: new Date(record.get("createdAt") as string),
+    updatedAt: new Date(record.get("updatedAt") as string),
+  };
+  const anchor = (record.get("anchor") as string | null) ?? undefined;
+  if (anchor !== undefined) {
+    link.anchor = anchor;
+  }
+  return link;
 }
 
 function toNumber(v: unknown): number {

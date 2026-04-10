@@ -1,6 +1,6 @@
 # 008 Sync Service
 
-> Status: Draft
+> Status: Done
 > Goal: Sync parsed documents into Neo4j deterministically
 > Depends on: `005-markdown-parser.md`, `006-fs-document-store.md`, `007-neo4j-schema-and-graph-store.md`
 

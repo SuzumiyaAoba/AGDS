@@ -63,6 +63,10 @@ export class InMemoryDocumentStore implements DocumentStore {
     from: DocumentRef,
     rawTarget: string,
   ): Promise<DocumentRef | null> {
+    const hashIdx = rawTarget.lastIndexOf("#");
+    const target = hashIdx >= 0 ? rawTarget.slice(0, hashIdx) : rawTarget;
+    if (target === "") return null;
+
     // Find the vault that owns the from-ref, then search within that vault.
     const vaultId = this.findVaultId(from);
     if (vaultId === undefined) return null;
@@ -70,8 +74,8 @@ export class InMemoryDocumentStore implements DocumentStore {
     if (vault === undefined) return null;
     for (const entry of vault.values()) {
       if (
-        entry.blob.ref.storeKey === rawTarget ||
-        entry.blob.ref.path === rawTarget
+        entry.blob.ref.storeKey === target ||
+        entry.blob.ref.path === target
       ) {
         return entry.blob.ref;
       }

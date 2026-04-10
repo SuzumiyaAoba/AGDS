@@ -21,6 +21,7 @@ export type {
 export type { Heading } from "./heading.js";
 export type { Tag } from "./tag.js";
 export type { Concept } from "./concept.js";
+export type { BrokenLink } from "./broken-link.js";
 
 export type {
   EdgeSource,
