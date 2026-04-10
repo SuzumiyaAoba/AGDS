@@ -1,6 +1,6 @@
 # 006 FS Document Store
 
-> Status: Draft
+> Status: Done
 > Goal: Implement the first real `DocumentStore`
 > Depends on: `005-markdown-parser.md`
 

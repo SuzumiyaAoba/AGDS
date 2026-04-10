@@ -14,6 +14,8 @@ export {
   normalizeAnchorText,
 } from "./occurrence-key.js";
 export type { ExtractLinksOptions } from "./links.js";
+export { extractFrontmatter } from "./frontmatter.js";
+export type { FrontmatterResult } from "./frontmatter.js";
 
 export interface ParseOptions {
   /**

@@ -1,2 +1,2 @@
-// Entrypoint — implementation added by later plans.
-export {};
+export { FsDocumentStore } from "./fs-document-store.js";
+export type { FsDocumentStoreOptions } from "./fs-document-store.js";
