@@ -99,6 +99,19 @@ const ParsedNeo4jBrokenLinkSchema = z.object({
   updatedAt: IsoDateStringSchema,
 });
 
+const ParsedNeo4jHeadingSchema = z.object({
+  id: z.string().min(1),
+  docId: z.string().length(16),
+  level: Neo4jIntegerSchema.pipe(z.number().int().min(1).max(6)),
+  text: z.string(),
+  slug: z.string(),
+  order: Neo4jIntegerSchema.pipe(z.number().int().nonnegative()),
+});
+
+const ParsedNeo4jTagSchema = z.object({
+  name: z.string().min(1),
+});
+
 const LockRecordSchema = z.object({
   holder: z.string().min(1),
   expiresAt: IsoDateStringSchema,
@@ -355,6 +368,36 @@ export class Neo4jGraphStore implements GraphStore {
     }
   }
 
+  async listHeadingsForDocument(docId: DocumentId): Promise<Heading[]> {
+    const session = this.readSession();
+    try {
+      const result = await session.run(Q.LIST_HEADINGS_FOR_DOCUMENT, { docId });
+      return result.records.map(recordToHeading);
+    } finally {
+      await session.close();
+    }
+  }
+
+  async listOrphanedHeadings(): Promise<Heading[]> {
+    const session = this.readSession();
+    try {
+      const result = await session.run(Q.LIST_ORPHANED_HEADINGS);
+      return result.records.map(recordToHeading);
+    } finally {
+      await session.close();
+    }
+  }
+
+  async listOrphanedTags(): Promise<Tag[]> {
+    const session = this.readSession();
+    try {
+      const result = await session.run(Q.LIST_ORPHANED_TAGS);
+      return result.records.map(recordToTag);
+    } finally {
+      await session.close();
+    }
+  }
+
   // ── Advisory locks ────────────────────────────────────────────────────────
 
   async acquireLock(scope: string, holder: string, ttlMs: number): Promise<void> {
@@ -509,6 +552,32 @@ function recordToBrokenLink(record: { get: (key: string) => unknown }): BrokenLi
   };
   if (parsed.anchor !== undefined) link.anchor = parsed.anchor;
   return link;
+}
+
+function recordToHeading(record: { get: (key: string) => unknown }): Heading {
+  const parsed = ParsedNeo4jHeadingSchema.parse({
+    id: record.get("id"),
+    docId: record.get("docId"),
+    level: record.get("level"),
+    text: record.get("text"),
+    slug: record.get("slug"),
+    order: record.get("order"),
+  });
+  return {
+    id: parsed.id,
+    docId: wrapDocumentId(parsed.docId),
+    level: parsed.level,
+    text: parsed.text,
+    slug: parsed.slug,
+    order: parsed.order,
+  };
+}
+
+function recordToTag(record: { get: (key: string) => unknown }): Tag {
+  const parsed = ParsedNeo4jTagSchema.parse({
+    name: record.get("name"),
+  });
+  return { name: parsed.name };
 }
 
 function wrapDocumentId(raw: string): DocumentId {

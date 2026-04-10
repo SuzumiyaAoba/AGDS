@@ -175,6 +175,30 @@ export class InMemoryGraphStore implements GraphStore {
     return results;
   }
 
+  async listHeadingsForDocument(docId: DocumentId): Promise<Heading[]> {
+    return this.headings.get(docId) ?? [];
+  }
+
+  async listOrphanedHeadings(): Promise<Heading[]> {
+    const results: Heading[] = [];
+    for (const [docId, headings] of this.headings.entries()) {
+      if (!this.documents.has(docId)) {
+        results.push(...headings);
+      }
+    }
+    return results;
+  }
+
+  async listOrphanedTags(): Promise<Tag[]> {
+    const results: Tag[] = [];
+    for (const [docId, tags] of this.tags.entries()) {
+      if (!this.documents.has(docId)) {
+        results.push(...tags);
+      }
+    }
+    return results;
+  }
+
   // ── Advisory locks ────────────────────────────────────────────────────────
 
   async acquireLock(

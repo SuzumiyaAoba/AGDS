@@ -205,6 +205,36 @@ RETURN
   r.updatedAt     AS updatedAt
 `;
 
+export const LIST_HEADINGS_FOR_DOCUMENT = `
+MATCH (d:Document {id: $docId})-[:HAS_HEADING]->(h:Heading)
+RETURN
+  h.id    AS id,
+  h.docId AS docId,
+  h.level AS level,
+  h.text  AS text,
+  h.slug  AS slug,
+  h.order AS order
+ORDER BY h.order
+`;
+
+export const LIST_ORPHANED_HEADINGS = `
+MATCH (h:Heading)
+WHERE NOT EXISTS { MATCH (:Document)-[:HAS_HEADING]->(h) }
+RETURN
+  h.id    AS id,
+  h.docId AS docId,
+  h.level AS level,
+  h.text  AS text,
+  h.slug  AS slug,
+  h.order AS order
+`;
+
+export const LIST_ORPHANED_TAGS = `
+MATCH (t:Tag)
+WHERE NOT EXISTS { MATCH (:Document)-[:HAS_TAG]->(t) }
+RETURN t.name AS name
+`;
+
 // ── Advisory locks ────────────────────────────────────────────────────────────
 
 export const ACQUIRE_LOCK = `

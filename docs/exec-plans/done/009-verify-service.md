@@ -1,6 +1,6 @@
 # 009 Verify Service
 
-> Status: Draft
+> Status: Done
 > Goal: Report integrity issues after sync
 > Depends on: `008-sync-service.md`
 
