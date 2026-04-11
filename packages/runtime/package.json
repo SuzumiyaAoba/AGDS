@@ -14,8 +14,12 @@
     "lint": "tsc --noEmit",
     "test": "vitest run"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "dependencies": {
+    "@agds/adapter-neo4j": "workspace:*",
+    "@agds/adapter-store-fs": "workspace:*",
     "@agds/core": "workspace:*"
   },
   "devDependencies": {

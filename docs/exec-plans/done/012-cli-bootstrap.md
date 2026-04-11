@@ -1,6 +1,6 @@
 # 012 CLI Bootstrap
 
-> Status: Draft
+> Status: Done
 > Goal: Wire the composition root and base CLI shell
 > Depends on: `002-package-skeletons.md`, `004-ports-and-shared-schemas.md`
 

@@ -6,6 +6,8 @@
   },
   "include": ["src"],
   "references": [
-    { "path": "../core" }
+    { "path": "../core" },
+    { "path": "../adapter-neo4j" },
+    { "path": "../adapter-store-fs" }
   ]
 }
