@@ -61,7 +61,8 @@ export class FetchService {
     const { document } = resolved;
 
     // Read the raw body from the document store.
-    const ref = { storeId: document.storeId, storeKey: document.storeKey, path: document.path };
+    const ref: import("@agds/core").DocumentRef = { storeId: document.storeId, storeKey: document.storeKey };
+    if (document.path !== undefined) ref.path = document.path;
     const blob = await this.store.read(ref);
     const { body: fullBody } = extractFrontmatter(blob.body);
 
@@ -81,7 +82,9 @@ export class FetchService {
     }
 
     const formattedBody = applyFormat(body, format);
-    return { document, heading, body: formattedBody, format };
+    const result: FetchResult = { document, body: formattedBody, format };
+    if (heading !== undefined) result.heading = heading;
+    return result;
   }
 }
 
@@ -100,12 +103,15 @@ function sliceSection(
   const idx = offsets.findIndex(({ heading }) => heading.slug === slug);
   if (idx === -1) return null;
 
-  const { offset: start, heading } = offsets[idx];
+  const entry = offsets[idx];
+  if (entry === undefined) return null;
+  const { offset: start, heading } = entry;
 
   // End at the next heading of equal or higher level, or EOF.
   let end = body.length;
   for (let i = idx + 1; i < offsets.length; i++) {
     const next = offsets[i];
+    if (next === undefined) break;
     if (next.heading.level <= heading.level) {
       end = next.offset;
       break;

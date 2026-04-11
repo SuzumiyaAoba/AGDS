@@ -50,20 +50,26 @@ function parseRawInput(input: string): string {
 function levenshtein(a: string, b: string): number {
   const m = a.length;
   const n = b.length;
+  // dp[j] = edit distance between a[0..i] and b[0..j]
   const dp: number[] = Array.from({ length: n + 1 }, (_, j) => j);
   for (let i = 1; i <= m; i++) {
-    let prev = dp[0];
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    let prev = dp[0]!;
     dp[0] = i;
     for (let j = 1; j <= n; j++) {
-      const temp = dp[j];
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const cur = dp[j]!;
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const left = dp[j - 1]!;
       dp[j] =
         a[i - 1] === b[j - 1]
           ? prev
-          : 1 + Math.min(prev, dp[j], dp[j - 1]);
-      prev = temp;
+          : 1 + Math.min(prev, cur, left);
+      prev = cur;
     }
   }
-  return dp[n];
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return dp[n]!;
 }
 
 function fuzzyMatch(documents: Document[], target: string): Document | undefined {
@@ -201,13 +207,14 @@ export class ResolveService {
         : Promise.resolve(undefined),
     ]);
 
-    return {
+    const result: ResolveResult = {
       document: doc,
-      heading,
       edges: summarizeEdges(edges),
       matchedBy,
       fuzzy,
     };
+    if (heading !== undefined) result.heading = heading;
+    return result;
   }
 
   private async resolveHeading(
