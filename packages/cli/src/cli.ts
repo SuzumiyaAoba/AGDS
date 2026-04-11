@@ -17,6 +17,7 @@ const main = defineCommand({
     neighbors: () => import("./commands/neighbors.js").then((m) => m.default),
     backlinks: () => import("./commands/backlinks.js").then((m) => m.default),
     query: () => import("./commands/query.js").then((m) => m.default),
+    suggest: () => import("./commands/suggest.js").then((m) => m.default),
   },
 });
 
