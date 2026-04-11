@@ -15,7 +15,8 @@ export interface VerifyServiceOptions {
 export type VerifyIssueKind =
   | "broken_link"
   | "orphaned_heading"
-  | "orphaned_tag";
+  | "orphaned_tag"
+  | "public_id_conflict";
 
 export interface VerifyIssue {
   kind: VerifyIssueKind;
@@ -67,6 +68,19 @@ export class VerifyService {
 
     for (const tag of orphanedTags) {
       issues.push(toOrphanedTagIssue(tag));
+    }
+
+    const byPublicId = new Map<string, Document[]>();
+    for (const doc of documents) {
+      if (doc.publicId === undefined) continue;
+      const group = byPublicId.get(doc.publicId) ?? [];
+      group.push(doc);
+      byPublicId.set(doc.publicId, group);
+    }
+    for (const [publicId, conflicting] of byPublicId) {
+      if (conflicting.length > 1) {
+        issues.push(toPublicIdConflictIssue(publicId, conflicting));
+      }
     }
 
     issues.sort(compareIssues);
@@ -121,6 +135,18 @@ function toOrphanedHeadingIssue(
     message: `Heading "${heading.slug}" is not attached to any document node.`,
     docId: heading.docId,
     context,
+  };
+}
+
+function toPublicIdConflictIssue(publicId: string, docs: Document[]): VerifyIssue {
+  const docIds = docs.map((d) => d.id).sort();
+  return {
+    kind: "public_id_conflict",
+    message: `Public ID "${publicId}" is assigned to ${docs.length} documents.`,
+    context: {
+      publicId,
+      docIds,
+    },
   };
 }
 

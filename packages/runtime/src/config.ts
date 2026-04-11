@@ -4,29 +4,34 @@
  * Callers (CLI, HTTP server, MCP) are responsible for loading raw config
  * from disk/env and parsing it into this shape before calling `createAgds`.
  */
-export interface AgdsVaultConfig {
+import { z } from "zod";
+
+export const AgdsVaultConfigSchema = z.object({
   /** Absolute path to the vault root directory. */
-  root: string;
+  root: z.string().min(1),
   /** File extensions to include in the vault. Defaults to `[".md"]`. */
-  extensions?: string[];
+  extensions: z.array(z.string()).optional(),
   /** Directory names to exclude during scan. Defaults to `["node_modules", ".git"]`. */
-  excludeDirs?: string[];
-}
+  excludeDirs: z.array(z.string()).optional(),
+});
+export type AgdsVaultConfig = z.infer<typeof AgdsVaultConfigSchema>;
 
-export interface AgdsNeo4jConfig {
+export const AgdsNeo4jConfigSchema = z.object({
   /** Bolt connection URI. Defaults to `"bolt://localhost:7687"`. */
-  url?: string;
+  url: z.string().optional(),
   /** Neo4j username. Defaults to `"neo4j"`. */
-  username?: string;
+  username: z.string().optional(),
   /** Neo4j password. */
-  password: string;
+  password: z.string().min(1),
   /** Neo4j database name. Defaults to `"neo4j"`. */
-  database?: string;
-}
+  database: z.string().optional(),
+});
+export type AgdsNeo4jConfig = z.infer<typeof AgdsNeo4jConfigSchema>;
 
-export interface AgdsConfig {
+export const AgdsConfigSchema = z.object({
   /** Logical vault identifier. Used in all graph queries and edge routing. */
-  vaultId: string;
-  vault: AgdsVaultConfig;
-  neo4j: AgdsNeo4jConfig;
-}
+  vaultId: z.string().min(1),
+  vault: AgdsVaultConfigSchema,
+  neo4j: AgdsNeo4jConfigSchema,
+});
+export type AgdsConfig = z.infer<typeof AgdsConfigSchema>;

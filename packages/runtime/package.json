@@ -20,7 +20,8 @@
   "dependencies": {
     "@agds/adapter-neo4j": "workspace:*",
     "@agds/adapter-store-fs": "workspace:*",
-    "@agds/core": "workspace:*"
+    "@agds/core": "workspace:*",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",

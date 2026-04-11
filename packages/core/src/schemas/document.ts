@@ -5,21 +5,18 @@ export const DocumentRefSchema = z.object({
   storeKey: z.string().min(1),
   path: z.string().optional(),
 });
-export type DocumentRef = z.infer<typeof DocumentRefSchema>;
 
 export const DocumentStatSchema = z.object({
   hash: z.string().regex(/^[0-9a-f]{64}$/, "expected SHA-256 hex string"),
   bytes: z.number().int().nonnegative(),
   storeVersion: z.string().min(1),
 });
-export type DocumentStat = z.infer<typeof DocumentStatSchema>;
 
 export const DocumentBlobSchema = z.object({
   ref: DocumentRefSchema,
   body: z.string(),
   stat: DocumentStatSchema,
 });
-export type DocumentBlob = z.infer<typeof DocumentBlobSchema>;
 
 export const DocumentSchema = z.object({
   id: z.string().length(16),
@@ -37,7 +34,6 @@ export const DocumentSchema = z.object({
   archived: z.boolean(),
   schemaVersion: z.number().int().nonnegative(),
 });
-export type Document = z.infer<typeof DocumentSchema>;
 
 export const HeadingSchema = z.object({
   id: z.string().min(1),
@@ -47,4 +43,3 @@ export const HeadingSchema = z.object({
   slug: z.string().min(1),
   order: z.number().int().nonnegative(),
 });
-export type Heading = z.infer<typeof HeadingSchema>;

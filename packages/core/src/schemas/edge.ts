@@ -1,11 +1,9 @@
 import { z } from "zod";
-import { RELATION_TYPE_PATTERN } from "./relation-type.js";
+import { RELATION_TYPE_PATTERN } from "../types/edge.js";
 
 export const EdgeSourceSchema = z.enum(["explicit", "llm", "user"]);
-export type EdgeSource = z.infer<typeof EdgeSourceSchema>;
 
 export const EdgeStatusSchema = z.enum(["active", "pending", "rejected"]);
-export type EdgeStatus = z.infer<typeof EdgeStatusSchema>;
 
 export const SemanticEdgeSchema = z.object({
   occurrenceKey: z.string().min(1),
@@ -21,4 +19,3 @@ export const SemanticEdgeSchema = z.object({
   updatedAt: z.date(),
   model: z.string().optional(),
 });
-export type SemanticEdge = z.infer<typeof SemanticEdgeSchema>;
