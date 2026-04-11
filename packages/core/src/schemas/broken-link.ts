@@ -9,4 +9,3 @@ export const BrokenLinkSchema = z.object({
   createdAt: z.date(),
   updatedAt: z.date(),
 });
-export type BrokenLink = z.infer<typeof BrokenLinkSchema>;

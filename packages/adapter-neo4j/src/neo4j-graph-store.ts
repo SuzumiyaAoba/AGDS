@@ -4,7 +4,7 @@ import { z } from "zod";
 import {
   DocumentSchema,
   SemanticEdgeSchema,
-} from "@agds/schema";
+} from "@agds/core";
 import type {
   BrokenLink,
   Document,

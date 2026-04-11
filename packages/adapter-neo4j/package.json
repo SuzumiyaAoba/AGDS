@@ -20,7 +20,6 @@
   ],
   "dependencies": {
     "@agds/core": "workspace:*",
-    "@agds/schema": "workspace:*",
     "neo4j-driver": "^6.0.1",
     "zod": "^4.3.6"
   },

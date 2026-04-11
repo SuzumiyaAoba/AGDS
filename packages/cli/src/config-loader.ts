@@ -1,24 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { z } from "zod";
 import type { AgdsConfig } from "@agds/runtime";
-import { ExitCode } from "@agds/runtime";
+import { AgdsConfigSchema, ExitCode } from "@agds/runtime";
 import { jsonLine } from "./error-handler.js";
-
-const AgdsConfigSchema = z.object({
-  vaultId: z.string().min(1),
-  vault: z.object({
-    root: z.string().min(1),
-    extensions: z.array(z.string()).optional(),
-    excludeDirs: z.array(z.string()).optional(),
-  }),
-  neo4j: z.object({
-    url: z.string().optional(),
-    username: z.string().optional(),
-    password: z.string().min(1),
-    database: z.string().optional(),
-  }),
-});
 
 /**
  * Load and validate the AGDS configuration.
@@ -62,5 +46,5 @@ export async function loadConfig(configPath?: string): Promise<AgdsConfig> {
     process.exit(ExitCode.CONFIG_ERROR);
   }
 
-  return result.data as AgdsConfig;
+  return result.data;
 }

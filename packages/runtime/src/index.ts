@@ -31,6 +31,7 @@ export type {
 export { QueryService } from "./query-service.js";
 export type { QueryOptions, QueryServiceOptions } from "./query-service.js";
 export type { AgdsConfig, AgdsNeo4jConfig, AgdsVaultConfig } from "./config.js";
+export { AgdsConfigSchema, AgdsNeo4jConfigSchema, AgdsVaultConfigSchema } from "./config.js";
 export { ExitCode, exitCodeForAgdsError } from "./exit-codes.js";
 export type { ExitCode as ExitCodeValue } from "./exit-codes.js";
 export { createAgds } from "./composition.js";
