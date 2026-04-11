@@ -80,9 +80,6 @@ server.directories.import=$AGDS_NEO4J_DIR/import
 
 dbms.security.procedures.unrestricted=apoc.*
 dbms.security.procedures.allowlist=apoc.*
-apoc.export.file.enabled=true
-apoc.import.file.enabled=true
-apoc.import.file.use_neo4j_config=true
 
 server.bolt.enabled=true
 server.http.enabled=true
@@ -94,6 +91,18 @@ EOF
               echo "==> Setting Neo4j initial password…"
               neo4j-admin dbms set-initial-password agds-dev-password 2>&1 || true
             fi
+
+            if grep -Eq '^apoc\.' "$NEO4J_CONF/neo4j.conf"; then
+              echo "==> Migrating APOC settings to apoc.conf…"
+              grep -Ev '^apoc\.' "$NEO4J_CONF/neo4j.conf" > "$NEO4J_CONF/neo4j.conf.tmp"
+              mv "$NEO4J_CONF/neo4j.conf.tmp" "$NEO4J_CONF/neo4j.conf"
+            fi
+
+            cat > "$NEO4J_CONF/apoc.conf" <<EOF
+apoc.export.file.enabled=true
+apoc.import.file.enabled=true
+apoc.import.file.use_neo4j_config=true
+EOF
 
             # Start Neo4j unless it is already running.
             if ! neo4j status > /dev/null 2>&1; then
