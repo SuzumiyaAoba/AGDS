@@ -1,7 +1,6 @@
 import { defineCommand } from "citty";
-import { createAgds } from "@agds/runtime";
-import { loadConfig } from "../config-loader.js";
-import { handleError, jsonLine } from "../error-handler.js";
+import { jsonLine } from "../error-handler.js";
+import { CONFIG_ARG, withAgds } from "../command-runner.js";
 
 export default defineCommand({
   meta: {
@@ -14,25 +13,14 @@ export default defineCommand({
       required: true,
       description: "Cypher query to execute (read-only)",
     },
-    config: {
-      type: "string",
-      description: "Path to the config file (default: agds.config.json)",
-    },
+    config: CONFIG_ARG,
   },
   async run({ args }) {
-    try {
-      const config = await loadConfig(args.config);
-      const agds = createAgds(config);
-      try {
-        const rows = await agds.query.query(args.cypher);
-        process.stdout.write(
-          jsonLine({ status: "ok", count: rows.length, rows }),
-        );
-      } finally {
-        await agds.close();
-      }
-    } catch (err) {
-      handleError(err);
-    }
+    await withAgds(args.config, async (agds) => {
+      const rows = await agds.query.query(args.cypher);
+      process.stdout.write(
+        jsonLine({ status: "ok", count: rows.length, rows }),
+      );
+    });
   },
 });

@@ -1,7 +1,6 @@
 import { defineCommand } from "citty";
-import { createAgds } from "@agds/runtime";
-import { loadConfig } from "../config-loader.js";
-import { handleError, jsonLine } from "../error-handler.js";
+import { jsonLine } from "../error-handler.js";
+import { CONFIG_ARG, withAgds } from "../command-runner.js";
 
 export default defineCommand({
   meta: {
@@ -9,23 +8,12 @@ export default defineCommand({
     description: "Sync vault documents into the graph",
   },
   args: {
-    config: {
-      type: "string",
-      description: "Path to the config file (default: agds.config.json)",
-    },
+    config: CONFIG_ARG,
   },
   async run({ args }) {
-    try {
-      const config = await loadConfig(args.config);
-      const agds = createAgds(config);
-      try {
-        const summary = await agds.sync.sync();
-        process.stdout.write(jsonLine({ status: "ok", ...summary }));
-      } finally {
-        await agds.close();
-      }
-    } catch (err) {
-      handleError(err);
-    }
+    await withAgds(args.config, async (agds) => {
+      const summary = await agds.sync.sync();
+      process.stdout.write(jsonLine({ status: "ok", ...summary }));
+    });
   },
 });
