@@ -1,6 +1,7 @@
 import type {
   BrokenLink,
   Document,
+  DocumentId,
   GraphStore,
   Heading,
   Tag,
@@ -19,7 +20,7 @@ export type VerifyIssueKind =
 export interface VerifyIssue {
   kind: VerifyIssueKind;
   message: string;
-  docId?: string;
+  docId?: DocumentId;
   context?: Record<string, unknown>;
 }
 

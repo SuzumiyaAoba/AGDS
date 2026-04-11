@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import type { AgdsConfig } from "@agds/runtime";
 import { ExitCode } from "@agds/runtime";
+import { jsonLine } from "./error-handler.js";
 
 const AgdsConfigSchema = z.object({
   vaultId: z.string().min(1),
@@ -35,9 +36,7 @@ export async function loadConfig(configPath?: string): Promise<AgdsConfig> {
   try {
     raw = await readFile(path, "utf8");
   } catch {
-    process.stderr.write(
-      JSON.stringify({ error: "CONFIG_ERROR", message: `Cannot read config file: ${path}` }) + "\n",
-    );
+    process.stderr.write(jsonLine({ error: "CONFIG_ERROR", message: `Cannot read config file: ${path}` }));
     process.exit(ExitCode.CONFIG_ERROR);
   }
 
@@ -45,9 +44,7 @@ export async function loadConfig(configPath?: string): Promise<AgdsConfig> {
   try {
     json = JSON.parse(raw);
   } catch {
-    process.stderr.write(
-      JSON.stringify({ error: "CONFIG_ERROR", message: `Config file is not valid JSON: ${path}` }) + "\n",
-    );
+    process.stderr.write(jsonLine({ error: "CONFIG_ERROR", message: `Config file is not valid JSON: ${path}` }));
     process.exit(ExitCode.CONFIG_ERROR);
   }
 
@@ -61,13 +58,7 @@ export async function loadConfig(configPath?: string): Promise<AgdsConfig> {
 
   const result = AgdsConfigSchema.safeParse(json);
   if (!result.success) {
-    process.stderr.write(
-      JSON.stringify({
-        error: "CONFIG_ERROR",
-        message: "Invalid config",
-        issues: result.error.issues,
-      }) + "\n",
-    );
+    process.stderr.write(jsonLine({ error: "CONFIG_ERROR", message: "Invalid config", issues: result.error.issues }));
     process.exit(ExitCode.CONFIG_ERROR);
   }
 

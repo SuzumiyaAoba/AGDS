@@ -267,8 +267,8 @@ describe("ResolveService — read-only invariant", () => {
       expect(agdsErr.code).toBe("RESOLVE_NOT_FOUND");
       expect(Array.isArray(agdsErr.details?.["trail"])).toBe(true);
       const trail = agdsErr.details?.["trail"] as string[];
+      // "document.id" is only attempted for 16-char hex inputs; a plain filename skips it.
       expect(trail).toContain("publicId");
-      expect(trail).toContain("document.id");
       expect(trail).toContain("storeKey");
       expect(trail).toContain("path");
       expect(trail).toContain("title");
