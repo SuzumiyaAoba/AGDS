@@ -4,7 +4,7 @@ import { ExitCode, exitCodeForAgdsError } from "@agds/runtime";
 /**
  * Serialize `value` to a single-line JSON string terminated with a newline.
  */
-function jsonLine(value: unknown): string {
+export function jsonLine(value: unknown): string {
   return JSON.stringify(value) + "\n";
 }
 

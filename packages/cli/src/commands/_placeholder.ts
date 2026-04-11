@@ -1,4 +1,5 @@
 import { defineCommand } from "citty";
+import { jsonLine } from "../error-handler.js";
 
 /**
  * Create a stub command that prints a JSON "not yet implemented" message
@@ -8,9 +9,7 @@ export function placeholderCommand(name: string, description: string) {
   return defineCommand({
     meta: { name, description },
     async run() {
-      process.stdout.write(
-        JSON.stringify({ status: "not_implemented", command: name }) + "\n",
-      );
+      process.stdout.write(jsonLine({ status: "not_implemented", command: name }));
       process.exit(1);
     },
   });

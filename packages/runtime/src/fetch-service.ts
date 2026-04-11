@@ -5,6 +5,7 @@ import {
 } from "@agds/core";
 import type {
   Document,
+  DocumentRef,
   DocumentStore,
   GraphStore,
   Heading,
@@ -15,6 +16,8 @@ export interface FetchServiceOptions {
   vaultId: string;
   graph: GraphStore;
   store: DocumentStore;
+  /** Optional pre-constructed resolver. When omitted a new one is created internally. */
+  resolver?: ResolveService;
 }
 
 export type FetchFormat = "md" | "text" | "json";
@@ -41,16 +44,12 @@ export interface FetchResult {
  * graph or the document store.
  */
 export class FetchService {
-  private readonly vaultId: string;
-  private readonly graph: GraphStore;
   private readonly store: DocumentStore;
   private readonly resolver: ResolveService;
 
   constructor(opts: FetchServiceOptions) {
-    this.vaultId = opts.vaultId;
-    this.graph = opts.graph;
     this.store = opts.store;
-    this.resolver = new ResolveService({ vaultId: opts.vaultId, graph: opts.graph });
+    this.resolver = opts.resolver ?? new ResolveService({ vaultId: opts.vaultId, graph: opts.graph });
   }
 
   async fetch(input: string, opts: FetchOptions = {}): Promise<FetchResult> {
@@ -61,17 +60,18 @@ export class FetchService {
     const { document } = resolved;
 
     // Read the raw body from the document store.
-    const ref: import("@agds/core").DocumentRef = { storeId: document.storeId, storeKey: document.storeKey };
+    const ref: DocumentRef = { storeId: document.storeId, storeKey: document.storeKey };
     if (document.path !== undefined) ref.path = document.path;
     const blob = await this.store.read(ref);
-    const { body: fullBody } = extractFrontmatter(blob.body);
 
-    let body = fullBody;
+    let body: string;
     let heading: Heading | undefined;
 
     // Slice to the requested section if provided.
     if (opts.section !== undefined) {
+      // parseDocument already strips frontmatter; reuse its output to avoid parsing twice.
       const parsed = parseDocument(blob.body, { docId: document.id });
+      body = parsed.body;
       const offsets = findHeadingOffsets(parsed.body, parsed.headings);
       const slice = sliceSection(parsed.body, offsets, opts.section);
       if (slice !== null) {
@@ -79,6 +79,8 @@ export class FetchService {
         heading = slice.heading;
       }
       // When the slug is not found, fall through to the full body.
+    } else {
+      ({ body } = extractFrontmatter(blob.body));
     }
 
     const formattedBody = applyFormat(body, format);

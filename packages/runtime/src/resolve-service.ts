@@ -131,9 +131,8 @@ export class ResolveService {
     const docPart = hashIdx >= 0 ? raw.slice(0, hashIdx) : raw;
     const anchorSlug = hashIdx >= 0 ? raw.slice(hashIdx + 1) : undefined;
 
-    // ── Step 1: publicId exact ─────────────────────────────────────────────
-    trail.push("publicId");
     if (docPart) {
+      trail.push("publicId");
       const doc = await this.graph.findDocumentByPublicId(
         this.vaultId,
         toPublicId(docPart),
@@ -143,9 +142,8 @@ export class ResolveService {
       }
     }
 
-    // ── Step 2: Document.id exact ──────────────────────────────────────────
-    trail.push("document.id");
     if (docPart && /^[0-9a-f]{16}$/i.test(docPart)) {
+      trail.push("document.id");
       const doc = await this.graph.findDocumentById(toDocumentId(docPart));
       if (doc !== null && doc.vaultId === this.vaultId) {
         return this.buildResult(doc, anchorSlug, "document.id", false);
@@ -155,39 +153,29 @@ export class ResolveService {
     // Load all non-archived documents once for the remaining steps.
     const documents = await this.graph.listDocuments(this.vaultId);
 
-    // ── Step 3: storeKey exact ─────────────────────────────────────────────
-    trail.push("storeKey");
     if (docPart) {
+      trail.push("storeKey");
       const doc = documents.find((d) => d.storeKey === docPart);
       if (doc !== undefined) {
         return this.buildResult(doc, anchorSlug, "storeKey", false);
       }
-    }
 
-    // ── Step 4: path exact ─────────────────────────────────────────────────
-    trail.push("path");
-    if (docPart) {
-      const doc = documents.find((d) => d.path === docPart);
-      if (doc !== undefined) {
-        return this.buildResult(doc, anchorSlug, "path", false);
+      trail.push("path");
+      const docByPath = documents.find((d) => d.path === docPart);
+      if (docByPath !== undefined) {
+        return this.buildResult(docByPath, anchorSlug, "path", false);
       }
-    }
 
-    // ── Step 5: title exact ────────────────────────────────────────────────
-    trail.push("title");
-    if (docPart) {
-      const doc = documents.find((d) => d.title === docPart);
-      if (doc !== undefined) {
-        return this.buildResult(doc, anchorSlug, "title", false);
+      trail.push("title");
+      const docByTitle = documents.find((d) => d.title === docPart);
+      if (docByTitle !== undefined) {
+        return this.buildResult(docByTitle, anchorSlug, "title", false);
       }
-    }
 
-    // ── Step 6: fuzzy title match ──────────────────────────────────────────
-    trail.push("fuzzy");
-    if (docPart) {
-      const doc = fuzzyMatch(documents, docPart);
-      if (doc !== undefined) {
-        return this.buildResult(doc, anchorSlug, "fuzzy", true);
+      trail.push("fuzzy");
+      const docFuzzy = fuzzyMatch(documents, docPart);
+      if (docFuzzy !== undefined) {
+        return this.buildResult(docFuzzy, anchorSlug, "fuzzy", true);
       }
     }
 

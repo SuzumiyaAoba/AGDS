@@ -57,14 +57,16 @@ export function createAgds(
   const vaultId = config.vaultId;
   const now = (): Date => new Date();
 
+  const resolveService = new ResolveService({ vaultId, graph });
+
   return {
     graph,
     store,
     sync: new SyncService({ vaultId, store, graph, holder: lockHolder, now }),
     verify: new VerifyService({ vaultId, graph }),
-    resolve: new ResolveService({ vaultId, graph }),
-    fetch: new FetchService({ vaultId, graph, store }),
-    navigation: new NavigationService({ vaultId, graph }),
+    resolve: resolveService,
+    fetch: new FetchService({ vaultId, graph, store, resolver: resolveService }),
+    navigation: new NavigationService({ vaultId, graph, resolver: resolveService }),
     query: new QueryService({ graph }),
     close: () => graph.close(),
   };
