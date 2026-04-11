@@ -52,6 +52,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@agds/adapter-neo4j':
+        specifier: workspace:*
+        version: link:../adapter-neo4j
       '@agds/core':
         specifier: workspace:*
         version: link:../core

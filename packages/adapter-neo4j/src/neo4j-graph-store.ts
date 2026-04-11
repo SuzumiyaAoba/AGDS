@@ -1,4 +1,5 @@
 import neo4j, { type Driver, type Session } from "neo4j-driver";
+import { loadMigrations, getCurrentVersion, applyPendingMigrations } from "./migration-runner.js";
 import { z } from "zod";
 import {
   DocumentSchema,
@@ -445,6 +446,35 @@ export class Neo4jGraphStore implements GraphStore {
     try {
       const result = await session.run(cypher, params ?? {});
       return result.records.map((r) => r.toObject() as T);
+    } finally {
+      await session.close();
+    }
+  }
+
+  // ── Schema migrations ─────────────────────────────────────────────────────
+
+  /**
+   * Return the current schema version recorded in the graph.
+   * Returns 0 when no version record has been written yet.
+   */
+  async getSchemaVersion(): Promise<number> {
+    const session = this.readSession();
+    try {
+      return await getCurrentVersion(session);
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Load migrations from `migrationsDir` and apply all pending ones.
+   * Returns the list of version numbers that were applied.
+   */
+  async runMigrations(migrationsDir: string): Promise<{ applied: number[] }> {
+    const migrations = await loadMigrations(migrationsDir);
+    const session = this.writeSession();
+    try {
+      return await applyPendingMigrations(session, migrations);
     } finally {
       await session.close();
     }
