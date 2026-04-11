@@ -2,9 +2,8 @@ import { open } from "node:fs/promises";
 import { resolve } from "node:path";
 import { defineCommand } from "citty";
 import { getMigrationsDir } from "@agds/adapter-neo4j";
-import { createAgds } from "@agds/runtime";
-import { loadConfig } from "../config-loader.js";
-import { handleError, jsonLine } from "../error-handler.js";
+import { jsonLine } from "../error-handler.js";
+import { CONFIG_ARG, withAgds } from "../command-runner.js";
 
 const MIGRATIONS_DIR = getMigrationsDir();
 
@@ -26,10 +25,7 @@ export default defineCommand({
     description: "Initialize vault config and install Neo4j schema",
   },
   args: {
-    config: {
-      type: "string",
-      description: "Path to the config file (default: agds.config.json)",
-    },
+    config: CONFIG_ARG,
   },
   async run({ args }) {
     const configPath = resolve(process.cwd(), args.config ?? "agds.config.json");
@@ -60,20 +56,12 @@ export default defineCommand({
     }
 
     // Config exists — connect and apply all pending schema migrations.
-    try {
-      const config = await loadConfig(configPath);
-      const agds = createAgds(config);
-      try {
-        const { apocVersion } = await agds.graph.verifyConnectivity();
-        const { applied } = await agds.graph.runMigrations(MIGRATIONS_DIR);
-        process.stdout.write(
-          jsonLine({ status: "ok", apocVersion, applied }),
-        );
-      } finally {
-        await agds.close();
-      }
-    } catch (err) {
-      handleError(err);
-    }
+    await withAgds(configPath, async (agds) => {
+      const { apocVersion } = await agds.graph.verifyConnectivity();
+      const { applied } = await agds.graph.runMigrations(MIGRATIONS_DIR);
+      process.stdout.write(
+        jsonLine({ status: "ok", apocVersion, applied }),
+      );
+    });
   },
 });
