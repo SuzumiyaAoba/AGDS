@@ -58,12 +58,17 @@ RETURN d
  * Replace all headings for a document atomically:
  * 1. Detach and delete existing HAS_HEADING edges (and orphan Heading nodes).
  * 2. Create new Heading nodes and HAS_HEADING edges.
+ *
+ * DISTINCT is required after the delete step: OPTIONAL MATCH returns one row
+ * per matched heading, so without DISTINCT the subsequent UNWIND would produce
+ * N_old × N_new rows and attempt to CREATE each new heading N_old times,
+ * causing a unique-constraint violation on Heading.id.
  */
 export const REPLACE_HEADINGS = `
 MATCH (d:Document {id: $docId})
 OPTIONAL MATCH (d)-[r:HAS_HEADING]->(h:Heading)
 DETACH DELETE h
-WITH d
+WITH DISTINCT d
 UNWIND $headings AS heading
 CREATE (h:Heading {
   id:    heading.id,
@@ -83,12 +88,16 @@ CREATE (d)-[:HAS_HEADING]->(h)
  * 1. Remove existing HAS_TAG edges from the document.
  * 2. Merge Tag nodes (global, shared across documents).
  * 3. Create new HAS_TAG edges.
+ *
+ * DISTINCT is required after the delete step for the same reason as
+ * REPLACE_HEADINGS: without it, UNWIND produces N_old × N_new rows and
+ * creates duplicate HAS_TAG edges.
  */
 export const REPLACE_TAGS = `
 MATCH (d:Document {id: $docId})
 OPTIONAL MATCH (d)-[r:HAS_TAG]->(:Tag)
 DELETE r
-WITH d
+WITH DISTINCT d
 UNWIND $tags AS tagName
 MERGE (t:Tag {name: tagName})
 CREATE (d)-[:HAS_TAG]->(t)

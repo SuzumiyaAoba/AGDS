@@ -45,9 +45,12 @@
             echo "==> Building packages…"
             pnpm build
 
-            # Expose the compiled CLI on $PATH without a global install.
+            # Expose `agds` on $PATH without a global install.
+            # cli.js has a #!/usr/bin/env node shebang; symlinking it as `agds`
+            # lets the shell find it by name.
+            chmod +x "$PWD/packages/cli/dist/cli.js"
+            ln -sf cli.js "$PWD/packages/cli/dist/agds"
             export PATH="$PWD/packages/cli/dist:$PATH"
-            # Resolve the shebang launcher produced by tsc.
             export AGDS_CLI="$PWD/packages/cli/dist/cli.js"
 
             # ── Neo4j ─────────────────────────────────────────────────────────
