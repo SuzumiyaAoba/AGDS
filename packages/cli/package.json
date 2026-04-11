@@ -15,12 +15,13 @@
   "scripts": {
     "build": "tsc --build",
     "lint": "tsc --noEmit",
-    "test": "echo 'no tests yet'"
+    "test": "vitest run"
   },
   "files": [
     "dist"
   ],
   "dependencies": {
+    "@agds/adapter-neo4j": "workspace:*",
     "@agds/core": "workspace:*",
     "@agds/runtime": "workspace:*",
     "citty": "^0.2.2",

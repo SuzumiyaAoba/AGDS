@@ -7,3 +7,5 @@ export {
   applyPendingMigrations,
 } from "./migration-runner.js";
 export type { Migration } from "./migration-runner.js";
+
+export { getMigrationsDir } from "./migrations.js";
