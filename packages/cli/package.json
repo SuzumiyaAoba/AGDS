@@ -24,6 +24,7 @@
     "@agds/adapter-neo4j": "workspace:*",
     "@agds/core": "workspace:*",
     "@agds/runtime": "workspace:*",
+    "@toon-format/toon": "^2.1.0",
     "citty": "^0.2.2",
     "zod": "^4.3.6"
   },

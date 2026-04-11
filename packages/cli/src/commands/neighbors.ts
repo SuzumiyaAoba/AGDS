@@ -1,7 +1,7 @@
 import { defineCommand } from "citty";
 import type { EdgeStatusFilter } from "@agds/runtime";
-import { jsonLine } from "../error-handler.js";
 import { CONFIG_ARG, usageError, withAgds } from "../command-runner.js";
+import { VALID_OUTPUT_FORMATS, writeLine, type OutputFormat } from "../output.js";
 
 const VALID_STATUSES: EdgeStatusFilter[] = ["active", "pending", "any"];
 
@@ -28,6 +28,10 @@ export default defineCommand({
       type: "string",
       description: "Edge status filter: active (default), pending, any",
     },
+    format: {
+      type: "string",
+      description: "Output format: json (default), toon",
+    },
     config: CONFIG_ARG,
   },
   async run({ args }) {
@@ -43,13 +47,17 @@ export default defineCommand({
       usageError(`Invalid depth "${rawDepth}". Must be a positive integer.`);
     }
 
+    const rawFormat = args.format ?? "json";
+    if (!VALID_OUTPUT_FORMATS.includes(rawFormat as OutputFormat)) {
+      usageError(`Invalid format "${rawFormat}". Valid formats: ${VALID_OUTPUT_FORMATS.join(", ")}`);
+    }
+    const format = rawFormat as OutputFormat;
+
     await withAgds(args.config, async (agds) => {
       const neighborOpts: import("@agds/runtime").NeighborsOptions = { depth, status };
       if (args.type !== undefined) neighborOpts.type = args.type;
       const results = await agds.navigation.neighbors(args.ref, neighborOpts);
-      process.stdout.write(
-        jsonLine({ status: "ok", count: results.length, neighbors: results }),
-      );
+      writeLine({ status: "ok", count: results.length, neighbors: results }, format);
     });
   },
 });

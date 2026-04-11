@@ -2,8 +2,11 @@ import { defineCommand } from "citty";
 import type { FetchFormat } from "@agds/runtime";
 import { jsonLine } from "../error-handler.js";
 import { CONFIG_ARG, usageError, withAgds } from "../command-runner.js";
+import { writeLine } from "../output.js";
 
-const VALID_FORMATS: FetchFormat[] = ["md", "text", "json"];
+// "toon" is handled in the CLI layer: fetch as json then re-encode.
+const VALID_FORMATS = ["md", "text", "json", "toon"] as const;
+type CliFormat = (typeof VALID_FORMATS)[number];
 
 export default defineCommand({
   meta: {
@@ -22,22 +25,32 @@ export default defineCommand({
     },
     format: {
       type: "string",
-      description: "Output format: md (default), text, json",
+      description: "Output format: md (default), text, json, toon",
     },
     config: CONFIG_ARG,
   },
   async run({ args }) {
-    const rawFormat = args.format ?? "md";
-    if (!VALID_FORMATS.includes(rawFormat as FetchFormat)) {
+    const rawFormat = (args.format ?? "md") as CliFormat;
+    if (!VALID_FORMATS.includes(rawFormat)) {
       usageError(`Invalid format "${rawFormat}". Valid formats: ${VALID_FORMATS.join(", ")}`);
     }
-    const format = rawFormat as FetchFormat;
+
+    // For toon, fetch as md so body is a plain string rather than
+    // JSON.stringify({body}), which would appear double-encoded in TOON.
+    const runtimeFormat: FetchFormat = rawFormat === "toon" ? "md" : rawFormat;
 
     await withAgds(args.config, async (agds) => {
-      const fetchOpts: import("@agds/runtime").FetchOptions = { format };
+      const fetchOpts: import("@agds/runtime").FetchOptions = { format: runtimeFormat };
       if (args.section !== undefined) fetchOpts.section = args.section;
       const result = await agds.fetch.fetch(args.ref, fetchOpts);
-      process.stdout.write(jsonLine({ status: "ok", ...result }));
+      if (rawFormat === "toon") {
+        const { document, heading, body } = result;
+        const out: Record<string, unknown> = { status: "ok", document, body, format: "toon" };
+        if (heading !== undefined) out["heading"] = heading;
+        writeLine(out, "toon");
+      } else {
+        process.stdout.write(jsonLine({ status: "ok", ...result }));
+      }
     });
   },
 });
