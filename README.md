@@ -41,9 +41,10 @@ nix develop
 ```
 
 This single command installs Node 20, pnpm, builds all packages, and starts a
-local Neo4j instance with APOC.
+local Neo4j instance with APOC. Once the prompt returns, `agds` is already on
+your `$PATH` — skip straight to [Initialize a vault](#initialize-a-vault).
 
-### Option B — Manual
+### Option B — Manual (without Nix)
 
 ```sh
 # 1. Install dependencies
