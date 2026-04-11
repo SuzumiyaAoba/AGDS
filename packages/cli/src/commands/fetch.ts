@@ -45,8 +45,17 @@ export default defineCommand({
       const result = await agds.fetch.fetch(args.ref, fetchOpts);
       if (rawFormat === "toon") {
         const { document, heading, body } = result;
-        const out: Record<string, unknown> = { status: "ok", document, body, format: "toon" };
-        if (heading !== undefined) out["heading"] = heading;
+        // Flatten document metadata to top-level keys so TOON does not
+        // fall back to YAML-like nesting for a single-object structure.
+        const out: Record<string, unknown> = {
+          status: "ok",
+          publicId: document.publicId ?? null,
+          title: document.title,
+          storeKey: document.storeKey,
+          body,
+          format: "toon",
+        };
+        if (heading !== undefined) out["section"] = heading.text;
         writeLine(out, "toon");
       } else {
         process.stdout.write(jsonLine({ status: "ok", ...result }));

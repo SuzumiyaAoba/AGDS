@@ -1,7 +1,7 @@
 import { defineCommand } from "citty";
 import type { EdgeStatusFilter } from "@agds/runtime";
 import { CONFIG_ARG, usageError, withAgds } from "../command-runner.js";
-import { VALID_OUTPUT_FORMATS, writeLine, type OutputFormat } from "../output.js";
+import { VALID_OUTPUT_FORMATS, flattenNeighbors, writeLine, type OutputFormat } from "../output.js";
 
 const VALID_STATUSES: EdgeStatusFilter[] = ["active", "pending", "any"];
 
@@ -57,7 +57,8 @@ export default defineCommand({
       const neighborOpts: import("@agds/runtime").NeighborsOptions = { depth, status };
       if (args.type !== undefined) neighborOpts.type = args.type;
       const results = await agds.navigation.neighbors(args.ref, neighborOpts);
-      writeLine({ status: "ok", count: results.length, neighbors: results }, format);
+      const neighbors = format === "toon" ? flattenNeighbors(results) : results;
+      writeLine({ status: "ok", count: results.length, neighbors }, format);
     });
   },
 });

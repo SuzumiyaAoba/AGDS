@@ -1,6 +1,6 @@
 import { defineCommand } from "citty";
 import { CONFIG_ARG, usageError, withAgds } from "../command-runner.js";
-import { VALID_OUTPUT_FORMATS, writeLine, type OutputFormat } from "../output.js";
+import { VALID_OUTPUT_FORMATS, flattenBacklinks, writeLine, type OutputFormat } from "../output.js";
 
 export default defineCommand({
   meta: {
@@ -28,7 +28,8 @@ export default defineCommand({
 
     await withAgds(args.config, async (agds) => {
       const results = await agds.navigation.backlinks(args.ref);
-      writeLine({ status: "ok", count: results.length, backlinks: results }, format);
+      const backlinks = format === "toon" ? flattenBacklinks(results) : results;
+      writeLine({ status: "ok", count: results.length, backlinks }, format);
     });
   },
 });
