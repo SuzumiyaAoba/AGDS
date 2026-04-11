@@ -1,6 +1,6 @@
 import { defineCommand } from "citty";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import { makeExternalOccurrenceKey } from "@agds/core";
 import type { SemanticEdge } from "@agds/core";
@@ -157,11 +157,15 @@ export default defineCommand({
           .join("\n");
 
         // ── LLM call ────────────────────────────────────────────────────
-        const { object } = await generateObject({
+        // Use generateText + manual JSON parsing so the command works with
+        // any local model, including those that do not support tool-calling
+        // or JSON-schema structured outputs.
+        const { text } = await generateText({
           model: lmstudio(modelId),
-          schema: SuggestionSchema,
-          prompt: `You are building a knowledge graph of Markdown documents.
-Suggest meaningful directed links FROM the source document TO relevant candidates.
+          system:
+            "You are a knowledge graph assistant. " +
+            "Respond with valid JSON only — no prose, no markdown fences.",
+          prompt: `Suggest meaningful directed links FROM the source document TO relevant candidates.
 
 SOURCE DOCUMENT
 publicId: ${sourceDoc.publicId ?? "(none)"}
@@ -172,19 +176,35 @@ ${sourceBody}
 CANDIDATE DOCUMENTS
 ${candidateLines}
 
+Return a JSON object with this exact structure (no other text):
+{
+  "suggestions": [
+    {
+      "targetPublicId": "<publicId from the candidate list>",
+      "type": "<SCREAMING_SNAKE_CASE relationship type>",
+      "confidence": <0.0–1.0>,
+      "rationale": "<one sentence>"
+    }
+  ]
+}
+
 Rules:
-- Only suggest links with genuine semantic relevance.
-- Use SCREAMING_SNAKE_CASE for type (REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES, etc.).
-- Set confidence based on how strongly the relationship holds (0.0–1.0).
-- Keep rationale to one sentence.
-- Return an empty suggestions array if no links are appropriate.`,
+- Only include candidates with genuine semantic relevance.
+- Valid types: REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES, EXTENDS, USES.
+- Set confidence based on how strongly the relationship holds.
+- Return {"suggestions":[]} if no links are appropriate.`,
         });
+
+        // Parse and validate the LLM response.
+        // Strip markdown code fences if the model wrapped the JSON anyway.
+        const jsonText = text.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
+        const { suggestions: rawSuggestions } = SuggestionSchema.parse(JSON.parse(jsonText));
 
         // ── Persist suggestions ──────────────────────────────────────────
         const now = new Date();
         const savedRows: SuggestionRow[] = [];
 
-        for (const s of object.suggestions) {
+        for (const s of rawSuggestions) {
           if (s.confidence < threshold) continue;
 
           // Match suggestion back to a concrete document.
