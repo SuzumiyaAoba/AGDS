@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Neo4j local data managed by the Nix dev shell
+.neo4j/
