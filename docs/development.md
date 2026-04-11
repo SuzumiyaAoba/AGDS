@@ -18,8 +18,22 @@ This one command:
 2. Runs `pnpm install --frozen-lockfile`.
 3. Compiles all TypeScript packages (`pnpm build`).
 4. Puts `agds` on your `$PATH`.
+5. Downloads the APOC Core plugin (hash-verified by Nix).
+6. Starts a Neo4j 5 Community instance with APOC enabled.
 
 You are ready to work. Skip the manual steps below.
+
+Neo4j state is stored under `.neo4j/` in the project root (gitignored).
+Stop the database at any time with:
+
+```sh
+neo4j stop
+```
+
+| Service | URL | Default credentials |
+|---|---|---|
+| Neo4j Browser | http://localhost:7474 | neo4j / agds-dev-password |
+| Bolt | bolt://localhost:7687 | — |
 
 #### Enable flakes (first-time Nix users)
 
@@ -42,23 +56,13 @@ pnpm install
 pnpm build
 ```
 
----
-
-## Starting Neo4j
-
-AGDS requires a running Neo4j instance with the APOC plugin.
-The included Docker Compose file starts one locally:
+Then start Neo4j with the provided Compose file:
 
 ```sh
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-| Service | URL | Default credentials |
-|---|---|---|
-| Neo4j Browser | http://localhost:7474 | neo4j / agds-dev-password |
-| Bolt | bolt://localhost:7687 | — |
-
-Wait for the health check to pass before running `agds init`:
+Wait for the health check to pass:
 
 ```sh
 docker compose -f docker/docker-compose.yml ps   # STATUS should be "healthy"
@@ -144,7 +148,7 @@ packages/
   runtime/           Service composition (createAgds)
   cli/               CLI entry point (agds binary)
 docker/
-  docker-compose.yml Local Neo4j + APOC
+  docker-compose.yml Local Neo4j + APOC (Option B / manual setup)
 docs/
   PLANS.md           Architecture reference
   development.md     This file
