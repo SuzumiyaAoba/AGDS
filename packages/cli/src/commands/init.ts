@@ -15,7 +15,7 @@ const CONFIG_TEMPLATE = {
   neo4j: {
     url: "bolt://localhost:7687",
     username: "neo4j",
-    password: "your-neo4j-password",
+    password: "agds-dev-password",
   },
 };
 
@@ -46,7 +46,7 @@ export default defineCommand({
         jsonLine({
           status: "hint",
           message:
-            "Edit agds.config.json: set vault.root to your notes directory and neo4j.password to your Neo4j password (nix develop default: agds-dev-password), then run `agds init` again.",
+            "Edit agds.config.json (set vault.root to your notes directory), then run `agds init` again.",
         }),
       );
       return;
