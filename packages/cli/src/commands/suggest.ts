@@ -27,8 +27,13 @@ const ReplacementSchema = z.object({
         .string()
         .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
         .describe("e.g. REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES"),
-      /** publicId or storeKey of the target document from the candidate list. */
+      /**
+       * publicId or storeKey of an existing document, OR a suggested kebab-case
+       * filename (e.g. "new-concept.md") for a document that does not yet exist.
+       */
       target: z.string().min(1),
+      /** true when `target` is a suggested new document, false when it matches an existing one. */
+      isNew: z.boolean(),
       confidence: z.number().min(0).max(1),
       rationale: z.string().describe("One-sentence explanation"),
     }),
@@ -178,15 +183,16 @@ export default defineCommand({
         system:
           "You are a knowledge graph assistant. " +
           "Respond with valid JSON only — no prose, no markdown fences.",
-        prompt: `You are given a Markdown document and a list of related documents in the same vault.
-Identify phrases or keywords in the document that should become links to one of the candidate documents.
+        prompt: `You are given a Markdown document and a list of existing documents in the same vault.
+Identify phrases or keywords in the document that should become links — either to an existing document
+or to a new document that does not yet exist but should be created.
 
 DOCUMENT
 title: ${sourceDoc.title}
 ---
 ${bodyText}
 
-CANDIDATE DOCUMENTS
+EXISTING DOCUMENTS
 ${candidateLines}
 
 Return a JSON object with this exact structure:
@@ -196,7 +202,8 @@ Return a JSON object with this exact structure:
       "originalText": "<exact phrase as it appears in the document>",
       "displayText": "<text to show in the link, usually same as originalText>",
       "type": "<SCREAMING_SNAKE_CASE relationship type>",
-      "target": "<publicId or storeKey of the target document>",
+      "target": "<publicId/storeKey of an existing doc, OR a kebab-case filename for a new doc>",
+      "isNew": <true if target does not exist yet, false if it matches an existing document>,
       "confidence": <0.0–1.0>,
       "rationale": "<one sentence>"
     }
@@ -208,6 +215,8 @@ Rules:
 - Prefer specific, meaningful phrases over single common words.
 - Valid types: REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES, EXTENDS, USES.
 - Do not suggest links for text that is already a link token.
+- For existing targets: use the exact publicId or storeKey from the EXISTING DOCUMENTS list.
+- For new targets: use a concise kebab-case filename ending in .md (e.g. "hexagonal-architecture.md").
 - Return {"replacements":[]} if no appropriate links are found.`,
       });
 
@@ -225,6 +234,7 @@ Rules:
         linkToken: string;
         type: string;
         target: string;
+        isNew: boolean;
         confidence: number;
         rationale: string;
         applied: boolean;
@@ -235,21 +245,24 @@ Rules:
       for (const r of raw) {
         if (r.confidence < threshold) continue;
 
-        // Resolve the target to a concrete storeKey for the link.
+        // Try to resolve to an existing document.
         const targetDoc = candidates.find(
           (d) => d.publicId === r.target || d.storeKey === r.target,
         );
-        if (targetDoc === undefined) continue;
 
-        const linkToken = `[?[${r.displayText}|${r.type}](${targetDoc.storeKey})]`;
+        // Use the resolved storeKey when the doc exists; otherwise use the
+        // LLM-supplied target directly as a suggested storeKey for a new doc.
+        const linkTarget = targetDoc?.storeKey ?? r.target;
+        const isNew = targetDoc === undefined;
+        const linkToken = `[?[${r.displayText}|${r.type}](${linkTarget})]`;
 
         if (!dryRun) {
           const { result, replaced } = replaceFirst(fileContent, r.originalText, linkToken);
           if (replaced) {
             fileContent = result;
-            applied.push({ ...r, target: targetDoc.storeKey, linkToken, applied: true });
+            applied.push({ ...r, target: linkTarget, isNew, linkToken, applied: true });
           } else {
-            applied.push({ ...r, target: targetDoc.storeKey, linkToken, applied: false });
+            applied.push({ ...r, target: linkTarget, isNew, linkToken, applied: false });
           }
         } else {
           // dry-run: check if originalText exists (unprotected) without mutating
@@ -258,7 +271,7 @@ Rules:
           const canApply =
             idx !== -1 &&
             !isProtected(idx, idx + r.originalText.length, ranges);
-          applied.push({ ...r, target: targetDoc.storeKey, linkToken, applied: canApply });
+          applied.push({ ...r, target: linkTarget, isNew, linkToken, applied: canApply });
         }
       }
 
