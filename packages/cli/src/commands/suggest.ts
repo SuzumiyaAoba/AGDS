@@ -10,83 +10,92 @@ import { VALID_OUTPUT_FORMATS, writeLine, type OutputFormat } from "../output.js
 const DEFAULT_URL = "http://localhost:1234/v1";
 const DEFAULT_THRESHOLD = 0.5;
 
-const MANAGED_START = "<!-- agds:suggested-links start -->";
-const MANAGED_END = "<!-- agds:suggested-links end -->";
-
-/** Schema for validating the LLM's JSON response. */
-const SuggestionSchema = z.object({
-  suggestions: z.array(
+/**
+ * Schema for the LLM response.
+ * Each replacement identifies a span of text in the document to turn into a
+ * pending link token `[?[displayText|TYPE](target)]`.
+ */
+const ReplacementSchema = z.object({
+  replacements: z.array(
     z.object({
-      targetPublicId: z
-        .string()
-        .describe("publicId of the target document"),
+      /** Exact phrase as it appears in the document body. */
+      originalText: z.string().min(1),
+      /** Display text for the link (usually identical to originalText). */
+      displayText: z.string().min(1),
+      /** Relationship type in SCREAMING_SNAKE_CASE. */
       type: z
         .string()
         .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
-        .describe("Relationship type in SCREAMING_SNAKE_CASE"),
+        .describe("e.g. REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES"),
+      /** publicId or storeKey of the target document from the candidate list. */
+      target: z.string().min(1),
       confidence: z.number().min(0).max(1),
       rationale: z.string().describe("One-sentence explanation"),
     }),
   ),
 });
 
+/** Regex that matches any AGDS link token (explicit or suggestion). */
+const LINK_TOKEN_RE = /\[?\??\[([^\]|]*?)(?:\|[A-Z][A-Z0-9_]*)?\]\([^)]*\)\]?/g;
+/** Regex that matches Markdown fenced code blocks. */
+const CODE_FENCE_RE = /^```[\s\S]*?^```/gm;
+/** Regex that matches inline code spans. */
+const INLINE_CODE_RE = /`[^`]+`/g;
+
 /**
- * Replace (or append) the managed suggested-links section in a Markdown file.
- *
- * Existing entries in the section that are NOT in `newLines` are preserved so
- * that prior human edits (removing `?` to confirm a link) survive re-runs.
+ * Collect the character ranges (start, end) that should be excluded from
+ * in-place replacement: existing link tokens and code blocks/spans.
  */
-function updateManagedSection(content: string, newLines: string[]): string {
-  const startIdx = content.indexOf(MANAGED_START);
-  const endIdx = content.indexOf(MANAGED_END);
-
-  let existingLines: string[] = [];
-  if (startIdx !== -1 && endIdx !== -1) {
-    const inner = content.slice(startIdx + MANAGED_START.length, endIdx);
-    existingLines = inner
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-  }
-
-  // Merge: keep existing entries, append only new ones not already present.
-  const merged = [...existingLines];
-  for (const line of newLines) {
-    if (!merged.includes(line)) {
-      merged.push(line);
+function protectedRanges(text: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  for (const re of [LINK_TOKEN_RE, CODE_FENCE_RE, INLINE_CODE_RE]) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      ranges.push([m.index, m.index + m[0].length]);
     }
   }
+  return ranges;
+}
 
-  if (merged.length === 0) return content;
+function isProtected(start: number, end: number, ranges: [number, number][]): boolean {
+  return ranges.some(([rs, re]) => start < re && end > rs);
+}
 
-  const section =
-    `${MANAGED_START}\n` +
-    merged.map((l) => l).join("\n") +
-    `\n${MANAGED_END}`;
-
-  if (startIdx !== -1 && endIdx !== -1) {
-    return (
-      content.slice(0, startIdx) +
-      section +
-      content.slice(endIdx + MANAGED_END.length)
-    );
+/**
+ * Replace the first unprotected occurrence of `original` in `text` with
+ * `replacement`. Returns the updated text and whether a replacement was made.
+ */
+function replaceFirst(
+  text: string,
+  original: string,
+  replacement: string,
+): { result: string; replaced: boolean } {
+  // Build protected ranges fresh each time so newly inserted tokens are respected.
+  const ranges = protectedRanges(text);
+  const idx = text.indexOf(original);
+  if (idx === -1) return { result: text, replaced: false };
+  if (isProtected(idx, idx + original.length, ranges)) {
+    return { result: text, replaced: false };
   }
-
-  return content.trimEnd() + "\n\n" + section + "\n";
+  return {
+    result: text.slice(0, idx) + replacement + text.slice(idx + original.length),
+    replaced: true,
+  };
 }
 
 export default defineCommand({
   meta: {
     name: "suggest",
     description:
-      "Use an LLM to suggest links and write them as [?[...]] into each document",
+      "Rewrite keywords in a document as [?[text|TYPE](target)] pending link tokens",
   },
   args: {
     ref: {
       type: "positional",
-      required: false,
+      required: true,
       description:
-        "Source document reference. Omit to process all documents.",
+        "Document to process — publicId, storeKey, file path, or title",
     },
     model: {
       type: "string",
@@ -98,11 +107,11 @@ export default defineCommand({
     },
     threshold: {
       type: "string",
-      description: `Minimum confidence to write a suggestion, 0–1 (default: ${DEFAULT_THRESHOLD})`,
+      description: `Minimum confidence to apply a replacement, 0–1 (default: ${DEFAULT_THRESHOLD})`,
     },
     "dry-run": {
       type: "boolean",
-      description: "Print suggestions without modifying any files",
+      description: "Show proposed replacements without modifying the file",
       default: false,
     },
     format: {
@@ -125,13 +134,9 @@ export default defineCommand({
     const format = rawFormat as OutputFormat;
 
     const threshold =
-      args.threshold !== undefined
-        ? parseFloat(args.threshold)
-        : DEFAULT_THRESHOLD;
+      args.threshold !== undefined ? parseFloat(args.threshold) : DEFAULT_THRESHOLD;
     if (isNaN(threshold) || threshold < 0 || threshold > 1) {
-      usageError(
-        `Invalid threshold "${args.threshold}". Must be a number between 0 and 1.`,
-      );
+      usageError(`Invalid threshold "${args.threshold}". Must be a number between 0 and 1.`);
     }
 
     const baseURL = args.url ?? DEFAULT_URL;
@@ -145,151 +150,130 @@ export default defineCommand({
     });
 
     await withAgds(args.config, async (agds, config) => {
+      // Resolve the target document.
+      const { document: sourceDoc } = await agds.resolve.resolve(args.ref);
+
+      // Fetch document body as plain text for the LLM context.
+      const sourceRef = sourceDoc.publicId ?? sourceDoc.storeKey;
+      const { body: bodyText } = await agds.fetch.fetch(sourceRef, { format: "text" });
+
+      // Build the candidate list (all other active docs).
       const allDocs = await agds.graph.listDocuments(config.vaultId);
-      const activeDocs = allDocs.filter((d) => !d.archived);
+      const candidates = allDocs.filter((d) => !d.archived && d.id !== sourceDoc.id);
 
-      let sourceDocs = activeDocs;
-      if (args.ref !== undefined) {
-        const { document } = await agds.resolve.resolve(args.ref);
-        sourceDocs = [document];
-      }
+      const candidateLines = candidates
+        .map((d) => `- publicId: ${d.publicId ?? d.storeKey}  title: ${d.title}  storeKey: ${d.storeKey}`)
+        .join("\n");
 
-      type SuggestionRow = {
-        target: string;
-        targetTitle: string;
-        type: string;
-        confidence: number;
-        rationale: string;
-        linkLine: string;
-      };
+      // ── LLM call ──────────────────────────────────────────────────────────
+      const { text: llmText } = await generateText({
+        model: lmstudio(modelId),
+        system:
+          "You are a knowledge graph assistant. " +
+          "Respond with valid JSON only — no prose, no markdown fences.",
+        prompt: `You are given a Markdown document and a list of related documents in the same vault.
+Identify phrases or keywords in the document that should become links to one of the candidate documents.
 
-      type SourceResult = {
-        source: string;
-        filePath: string;
-        written: number;
-        suggestions: SuggestionRow[];
-      };
-
-      const results: SourceResult[] = [];
-
-      for (const sourceDoc of sourceDocs) {
-        const candidates = activeDocs.filter((d) => d.id !== sourceDoc.id);
-        if (candidates.length === 0) continue;
-
-        // Fetch body as plain text for the LLM.
-        const sourceRef = sourceDoc.publicId ?? sourceDoc.storeKey;
-        const { body: sourceBody } = await agds.fetch.fetch(sourceRef, {
-          format: "text",
-        });
-
-        const candidateLines = candidates
-          .map((d) => `- publicId: ${d.publicId ?? d.storeKey}  title: ${d.title}`)
-          .join("\n");
-
-        // ── LLM call ────────────────────────────────────────────────────
-        const { text } = await generateText({
-          model: lmstudio(modelId),
-          system:
-            "You are a knowledge graph assistant. " +
-            "Respond with valid JSON only — no prose, no markdown fences.",
-          prompt: `Suggest meaningful directed links FROM the source document TO relevant candidates.
-
-SOURCE DOCUMENT
-publicId: ${sourceDoc.publicId ?? "(none)"}
+DOCUMENT
 title: ${sourceDoc.title}
 ---
-${sourceBody}
+${bodyText}
 
 CANDIDATE DOCUMENTS
 ${candidateLines}
 
 Return a JSON object with this exact structure:
 {
-  "suggestions": [
+  "replacements": [
     {
-      "targetPublicId": "<publicId from the candidate list>",
-      "type": "<SCREAMING_SNAKE_CASE>",
+      "originalText": "<exact phrase as it appears in the document>",
+      "displayText": "<text to show in the link, usually same as originalText>",
+      "type": "<SCREAMING_SNAKE_CASE relationship type>",
+      "target": "<publicId or storeKey of the target document>",
       "confidence": <0.0–1.0>,
       "rationale": "<one sentence>"
     }
   ]
 }
 
-Valid types: REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES, EXTENDS, USES.
-Return {"suggestions":[]} if no links are appropriate.`,
-        });
+Rules:
+- originalText must be a verbatim substring of the document.
+- Prefer specific, meaningful phrases over single common words.
+- Valid types: REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES, EXTENDS, USES.
+- Do not suggest links for text that is already a link token.
+- Return {"replacements":[]} if no appropriate links are found.`,
+      });
 
-        // Parse LLM response (strip markdown fences if present).
-        const jsonText = text
-          .replace(/^```(?:json)?\s*/m, "")
-          .replace(/\s*```\s*$/m, "")
-          .trim();
-        const { suggestions: rawSuggestions } = SuggestionSchema.parse(
-          JSON.parse(jsonText),
+      // Parse LLM response.
+      const jsonText = llmText
+        .replace(/^```(?:json)?\s*/m, "")
+        .replace(/\s*```\s*$/m, "")
+        .trim();
+      const { replacements: raw } = ReplacementSchema.parse(JSON.parse(jsonText));
+
+      // ── Apply replacements to the raw file content ─────────────────────
+      const filePath = join(config.vault.root, sourceDoc.storeKey);
+      let fileContent = await readFile(filePath, "utf8");
+
+      type AppliedRow = {
+        originalText: string;
+        linkToken: string;
+        type: string;
+        target: string;
+        confidence: number;
+        rationale: string;
+        applied: boolean;
+      };
+
+      const applied: AppliedRow[] = [];
+
+      for (const r of raw) {
+        if (r.confidence < threshold) continue;
+
+        // Resolve the target to a concrete storeKey for the link.
+        const targetDoc = candidates.find(
+          (d) => d.publicId === r.target || d.storeKey === r.target,
         );
+        if (targetDoc === undefined) continue;
 
-        // Build link lines for the managed section.
-        const suggestionRows: SuggestionRow[] = [];
+        const linkToken = `[?[${r.displayText}|${r.type}](${targetDoc.storeKey})]`;
 
-        for (const s of rawSuggestions) {
-          if (s.confidence < threshold) continue;
-
-          const target = candidates.find(
-            (d) =>
-              d.publicId === s.targetPublicId ||
-              d.storeKey === s.targetPublicId,
-          );
-          if (target === undefined) continue;
-
-          // Use storeKey as the link target so agds sync can resolve it.
-          const linkTarget = target.storeKey;
-          const displayText = target.title;
-          // Include the relationship type annotation.
-          const linkLine = `[?[${displayText}|${s.type}](${linkTarget})]`;
-
-          suggestionRows.push({
-            target: linkTarget,
-            targetTitle: target.title,
-            type: s.type,
-            confidence: s.confidence,
-            rationale: s.rationale,
-            linkLine,
-          });
+        if (!dryRun) {
+          const { result, replaced } = replaceFirst(fileContent, r.originalText, linkToken);
+          if (replaced) {
+            fileContent = result;
+            applied.push({ ...r, target: targetDoc.storeKey, linkToken, applied: true });
+          } else {
+            applied.push({ ...r, target: targetDoc.storeKey, linkToken, applied: false });
+          }
+        } else {
+          // dry-run: check if originalText exists (unprotected) without mutating
+          const ranges = protectedRanges(fileContent);
+          const idx = fileContent.indexOf(r.originalText);
+          const canApply =
+            idx !== -1 &&
+            !isProtected(idx, idx + r.originalText.length, ranges);
+          applied.push({ ...r, target: targetDoc.storeKey, linkToken, applied: canApply });
         }
-
-        // ── Write suggestions into the Markdown file ─────────────────────
-        const filePath = join(config.vault.root, sourceDoc.storeKey);
-
-        if (!dryRun && suggestionRows.length > 0) {
-          const original = await readFile(filePath, "utf8");
-          const updated = updateManagedSection(
-            original,
-            suggestionRows.map((r) => r.linkLine),
-          );
-          await writeFile(filePath, updated, "utf8");
-        }
-
-        results.push({
-          source: sourceDoc.publicId ?? sourceDoc.storeKey,
-          filePath,
-          written: dryRun ? 0 : suggestionRows.length,
-          suggestions: suggestionRows,
-        });
       }
 
-      const totalWritten = results.reduce((sum, r) => sum + r.written, 0);
+      if (!dryRun) {
+        await writeFile(filePath, fileContent, "utf8");
+      }
+
+      const written = applied.filter((r) => r.applied).length;
+
       writeLine(
         {
           status: "ok",
           dryRun,
-          threshold,
-          totalWritten,
-          hint: dryRun
-            ? "Run without --dry-run to write suggestions, then run `agds sync`."
-            : totalWritten > 0
+          file: filePath,
+          written,
+          hint:
+            !dryRun && written > 0
               ? "Run `agds sync` to load the new suggestions into the graph."
               : undefined,
-          results,
+          replacements: applied,
         },
         format,
       );
