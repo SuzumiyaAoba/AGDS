@@ -1,54 +1,92 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { defineCommand } from "citty";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText } from "ai";
 import { z } from "zod";
-import { makeExternalOccurrenceKey } from "@agds/core";
-import type { SemanticEdge } from "@agds/core";
 import { CONFIG_ARG, usageError, withAgds } from "../command-runner.js";
 import { VALID_OUTPUT_FORMATS, writeLine, type OutputFormat } from "../output.js";
 
 const DEFAULT_URL = "http://localhost:1234/v1";
 const DEFAULT_THRESHOLD = 0.5;
 
-/**
- * Schema for the structured output from the LLM.
- * Each suggestion names a candidate document and proposes a typed edge.
- */
+const MANAGED_START = "<!-- agds:suggested-links start -->";
+const MANAGED_END = "<!-- agds:suggested-links end -->";
+
+/** Schema for validating the LLM's JSON response. */
 const SuggestionSchema = z.object({
   suggestions: z.array(
     z.object({
       targetPublicId: z
         .string()
-        .describe("publicId of the target document as listed in the candidates"),
+        .describe("publicId of the target document"),
       type: z
         .string()
         .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
-        .describe(
-          "Relationship type in SCREAMING_SNAKE_CASE — e.g. REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES",
-        ),
-      confidence: z
-        .number()
-        .min(0)
-        .max(1)
-        .describe("Confidence score between 0.0 and 1.0"),
-      rationale: z
-        .string()
-        .describe("One-sentence explanation of why this link is appropriate"),
+        .describe("Relationship type in SCREAMING_SNAKE_CASE"),
+      confidence: z.number().min(0).max(1),
+      rationale: z.string().describe("One-sentence explanation"),
     }),
   ),
 });
 
+/**
+ * Replace (or append) the managed suggested-links section in a Markdown file.
+ *
+ * Existing entries in the section that are NOT in `newLines` are preserved so
+ * that prior human edits (removing `?` to confirm a link) survive re-runs.
+ */
+function updateManagedSection(content: string, newLines: string[]): string {
+  const startIdx = content.indexOf(MANAGED_START);
+  const endIdx = content.indexOf(MANAGED_END);
+
+  let existingLines: string[] = [];
+  if (startIdx !== -1 && endIdx !== -1) {
+    const inner = content.slice(startIdx + MANAGED_START.length, endIdx);
+    existingLines = inner
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+  }
+
+  // Merge: keep existing entries, append only new ones not already present.
+  const merged = [...existingLines];
+  for (const line of newLines) {
+    if (!merged.includes(line)) {
+      merged.push(line);
+    }
+  }
+
+  if (merged.length === 0) return content;
+
+  const section =
+    `${MANAGED_START}\n` +
+    merged.map((l) => l).join("\n") +
+    `\n${MANAGED_END}`;
+
+  if (startIdx !== -1 && endIdx !== -1) {
+    return (
+      content.slice(0, startIdx) +
+      section +
+      content.slice(endIdx + MANAGED_END.length)
+    );
+  }
+
+  return content.trimEnd() + "\n\n" + section + "\n";
+}
+
 export default defineCommand({
   meta: {
     name: "suggest",
-    description: "Suggest pending links between documents using an LLM via LM Studio",
+    description:
+      "Use an LLM to suggest links and write them as [?[...]] into each document",
   },
   args: {
     ref: {
       type: "positional",
       required: false,
       description:
-        "Source document reference — publicId, storeKey, title, or AGDS link token. Omit to process all documents.",
+        "Source document reference. Omit to process all documents.",
     },
     model: {
       type: "string",
@@ -60,11 +98,11 @@ export default defineCommand({
     },
     threshold: {
       type: "string",
-      description: `Minimum confidence to save a suggestion, 0–1 (default: ${DEFAULT_THRESHOLD})`,
+      description: `Minimum confidence to write a suggestion, 0–1 (default: ${DEFAULT_THRESHOLD})`,
     },
     "dry-run": {
       type: "boolean",
-      description: "Print suggestions without writing them to the graph",
+      description: "Print suggestions without modifying any files",
       default: false,
     },
     format: {
@@ -74,7 +112,6 @@ export default defineCommand({
     config: CONFIG_ARG,
   },
   async run({ args }) {
-    // ── Validate CLI args ──────────────────────────────────────────────────
     if (!args.model) {
       usageError("--model is required. Pass the LM Studio model ID.");
     }
@@ -101,10 +138,6 @@ export default defineCommand({
     const modelId = args.model;
     const dryRun = args["dry-run"] ?? false;
 
-    // ── LM Studio client ───────────────────────────────────────────────────
-    // createOpenAICompatible targets OpenAI-compatible local servers such as
-    // LM Studio. It avoids OpenAI-specific features that local models may
-    // not support (e.g. strict structured-output tool calling).
     const lmstudio = createOpenAICompatible({
       name: "lmstudio",
       baseURL,
@@ -115,7 +148,6 @@ export default defineCommand({
       const allDocs = await agds.graph.listDocuments(config.vaultId);
       const activeDocs = allDocs.filter((d) => !d.archived);
 
-      // Determine source documents to process.
       let sourceDocs = activeDocs;
       if (args.ref !== undefined) {
         const { document } = await agds.resolve.resolve(args.ref);
@@ -123,16 +155,18 @@ export default defineCommand({
       }
 
       type SuggestionRow = {
-        targetPublicId: string | null;
+        target: string;
         targetTitle: string;
         type: string;
         confidence: number;
         rationale: string;
+        linkLine: string;
       };
 
       type SourceResult = {
         source: string;
-        saved: number;
+        filePath: string;
+        written: number;
         suggestions: SuggestionRow[];
       };
 
@@ -142,24 +176,17 @@ export default defineCommand({
         const candidates = activeDocs.filter((d) => d.id !== sourceDoc.id);
         if (candidates.length === 0) continue;
 
-        // Fetch source body as plain text for the LLM.
+        // Fetch body as plain text for the LLM.
         const sourceRef = sourceDoc.publicId ?? sourceDoc.storeKey;
         const { body: sourceBody } = await agds.fetch.fetch(sourceRef, {
           format: "text",
         });
 
-        // Build a compact candidate list: publicId + title.
         const candidateLines = candidates
-          .map(
-            (d) =>
-              `- publicId: ${d.publicId ?? d.storeKey}  title: ${d.title}`,
-          )
+          .map((d) => `- publicId: ${d.publicId ?? d.storeKey}  title: ${d.title}`)
           .join("\n");
 
         // ── LLM call ────────────────────────────────────────────────────
-        // Use generateText + manual JSON parsing so the command works with
-        // any local model, including those that do not support tool-calling
-        // or JSON-schema structured outputs.
         const { text } = await generateText({
           model: lmstudio(modelId),
           system:
@@ -176,38 +203,37 @@ ${sourceBody}
 CANDIDATE DOCUMENTS
 ${candidateLines}
 
-Return a JSON object with this exact structure (no other text):
+Return a JSON object with this exact structure:
 {
   "suggestions": [
     {
       "targetPublicId": "<publicId from the candidate list>",
-      "type": "<SCREAMING_SNAKE_CASE relationship type>",
+      "type": "<SCREAMING_SNAKE_CASE>",
       "confidence": <0.0–1.0>,
       "rationale": "<one sentence>"
     }
   ]
 }
 
-Rules:
-- Only include candidates with genuine semantic relevance.
-- Valid types: REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES, EXTENDS, USES.
-- Set confidence based on how strongly the relationship holds.
-- Return {"suggestions":[]} if no links are appropriate.`,
+Valid types: REFERENCES, RELATED_TO, IMPLEMENTS, PART_OF, DESCRIBES, EXTENDS, USES.
+Return {"suggestions":[]} if no links are appropriate.`,
         });
 
-        // Parse and validate the LLM response.
-        // Strip markdown code fences if the model wrapped the JSON anyway.
-        const jsonText = text.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
-        const { suggestions: rawSuggestions } = SuggestionSchema.parse(JSON.parse(jsonText));
+        // Parse LLM response (strip markdown fences if present).
+        const jsonText = text
+          .replace(/^```(?:json)?\s*/m, "")
+          .replace(/\s*```\s*$/m, "")
+          .trim();
+        const { suggestions: rawSuggestions } = SuggestionSchema.parse(
+          JSON.parse(jsonText),
+        );
 
-        // ── Persist suggestions ──────────────────────────────────────────
-        const now = new Date();
-        const savedRows: SuggestionRow[] = [];
+        // Build link lines for the managed section.
+        const suggestionRows: SuggestionRow[] = [];
 
         for (const s of rawSuggestions) {
           if (s.confidence < threshold) continue;
 
-          // Match suggestion back to a concrete document.
           const target = candidates.find(
             (d) =>
               d.publicId === s.targetPublicId ||
@@ -215,45 +241,56 @@ Rules:
           );
           if (target === undefined) continue;
 
-          if (!dryRun) {
-            const occurrenceKey = makeExternalOccurrenceKey(
-              `suggest:${sourceDoc.id}:${target.id}:${s.type}`,
-            );
-            const edge: SemanticEdge = {
-              occurrenceKey,
-              sourceDocId: sourceDoc.id,
-              targetDocId: target.id,
-              type: s.type,
-              source: "llm",
-              status: "pending",
-              confidence: s.confidence,
-              rationale: s.rationale,
-              model: modelId,
-              createdAt: now,
-              updatedAt: now,
-            };
-            await agds.graph.upsertSemanticEdge(edge);
-          }
+          // Use storeKey as the link target so agds sync can resolve it.
+          const linkTarget = target.storeKey;
+          const displayText = target.title;
+          // Include the relationship type annotation.
+          const linkLine = `[?[${displayText}|${s.type}](${linkTarget})]`;
 
-          savedRows.push({
-            targetPublicId: target.publicId ?? null,
+          suggestionRows.push({
+            target: linkTarget,
             targetTitle: target.title,
             type: s.type,
             confidence: s.confidence,
             rationale: s.rationale,
+            linkLine,
           });
+        }
+
+        // ── Write suggestions into the Markdown file ─────────────────────
+        const filePath = join(config.vault.root, sourceDoc.storeKey);
+
+        if (!dryRun && suggestionRows.length > 0) {
+          const original = await readFile(filePath, "utf8");
+          const updated = updateManagedSection(
+            original,
+            suggestionRows.map((r) => r.linkLine),
+          );
+          await writeFile(filePath, updated, "utf8");
         }
 
         results.push({
           source: sourceDoc.publicId ?? sourceDoc.storeKey,
-          saved: savedRows.length,
-          suggestions: savedRows,
+          filePath,
+          written: dryRun ? 0 : suggestionRows.length,
+          suggestions: suggestionRows,
         });
       }
 
-      const totalSaved = results.reduce((sum, r) => sum + r.saved, 0);
+      const totalWritten = results.reduce((sum, r) => sum + r.written, 0);
       writeLine(
-        { status: "ok", dryRun, threshold, totalSaved, results },
+        {
+          status: "ok",
+          dryRun,
+          threshold,
+          totalWritten,
+          hint: dryRun
+            ? "Run without --dry-run to write suggestions, then run `agds sync`."
+            : totalWritten > 0
+              ? "Run `agds sync` to load the new suggestions into the graph."
+              : undefined,
+          results,
+        },
         format,
       );
     });
