@@ -153,9 +153,16 @@ export default defineCommand({
       // Resolve the target document.
       const { document: sourceDoc } = await agds.resolve.resolve(args.ref);
 
-      // Fetch document body as plain text for the LLM context.
-      const sourceRef = sourceDoc.publicId ?? sourceDoc.storeKey;
-      const { body: bodyText } = await agds.fetch.fetch(sourceRef, { format: "text" });
+      // Read the raw file content — used both for the LLM prompt and for
+      // in-place replacement, so the two always see identical text.
+      const filePath = join(config.vault.root, sourceDoc.storeKey);
+      let fileContent = await readFile(filePath, "utf8");
+
+      // Strip YAML frontmatter before passing to the LLM so it only sees
+      // the Markdown body.  The replacement still runs on fileContent (with
+      // frontmatter) so indexOf positions remain valid.
+      const FRONTMATTER_RE = /^---\n[\s\S]*?\n---\n*/;
+      const bodyText = fileContent.replace(FRONTMATTER_RE, "");
 
       // Build the candidate list (all other active docs).
       const allDocs = await agds.graph.listDocuments(config.vaultId);
@@ -212,8 +219,6 @@ Rules:
       const { replacements: raw } = ReplacementSchema.parse(JSON.parse(jsonText));
 
       // ── Apply replacements to the raw file content ─────────────────────
-      const filePath = join(config.vault.root, sourceDoc.storeKey);
-      let fileContent = await readFile(filePath, "utf8");
 
       type AppliedRow = {
         originalText: string;
