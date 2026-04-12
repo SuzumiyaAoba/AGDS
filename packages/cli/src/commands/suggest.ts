@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { defineCommand } from "citty";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText } from "ai";
+import { createTwoFilesPatch } from "diff";
 import { z } from "zod";
 import { CONFIG_ARG, usageError, withAgds } from "../command-runner.js";
 import { VALID_OUTPUT_FORMATS, writeLine, type OutputFormat } from "../output.js";
@@ -161,7 +162,8 @@ export default defineCommand({
       // Read the raw file content — used both for the LLM prompt and for
       // in-place replacement, so the two always see identical text.
       const filePath = join(config.vault.root, sourceDoc.storeKey);
-      let fileContent = await readFile(filePath, "utf8");
+      const originalFileContent = await readFile(filePath, "utf8");
+      let fileContent = originalFileContent;
 
       // Strip YAML frontmatter before passing to the LLM so it only sees
       // the Markdown body.  The replacement still runs on fileContent (with
@@ -265,36 +267,53 @@ Rules:
             applied.push({ ...r, target: linkTarget, isNew, linkToken, applied: false });
           }
         } else {
-          // dry-run: check if originalText exists (unprotected) without mutating
-          const ranges = protectedRanges(fileContent);
-          const idx = fileContent.indexOf(r.originalText);
-          const canApply =
-            idx !== -1 &&
-            !isProtected(idx, idx + r.originalText.length, ranges);
-          applied.push({ ...r, target: linkTarget, isNew, linkToken, applied: canApply });
+          // dry-run: simulate the replacement to build the diff later.
+          const { result, replaced } = replaceFirst(fileContent, r.originalText, linkToken);
+          if (replaced) {
+            fileContent = result;
+          }
+          applied.push({ ...r, target: linkTarget, isNew, linkToken, applied: replaced });
         }
-      }
-
-      if (!dryRun) {
-        await writeFile(filePath, fileContent, "utf8");
       }
 
       const written = applied.filter((r) => r.applied).length;
 
-      writeLine(
-        {
-          status: "ok",
-          dryRun,
-          file: filePath,
-          written,
-          hint:
-            !dryRun && written > 0
-              ? "Run `agds sync` to load the new suggestions into the graph."
-              : undefined,
-          replacements: applied,
-        },
-        format,
-      );
+      if (dryRun) {
+        // Generate a unified diff showing what would change.
+        const patch =
+          written > 0
+            ? createTwoFilesPatch(filePath, filePath, originalFileContent, fileContent, "original", "proposed")
+            : null;
+
+        writeLine(
+          {
+            status: "ok",
+            dryRun: true,
+            file: filePath,
+            written,
+            diff: patch,
+            replacements: applied,
+          },
+          format,
+        );
+      } else {
+        await writeFile(filePath, fileContent, "utf8");
+
+        writeLine(
+          {
+            status: "ok",
+            dryRun: false,
+            file: filePath,
+            written,
+            hint:
+              written > 0
+                ? "Run `agds sync` to load the new suggestions into the graph."
+                : undefined,
+            replacements: applied,
+          },
+          format,
+        );
+      }
     });
   },
 });
