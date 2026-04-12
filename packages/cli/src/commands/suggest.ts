@@ -39,8 +39,8 @@ const ReplacementSchema = z.object({
 const LINK_TOKEN_RE = /\[?\??\[([^\]|]*?)(?:\|[A-Z][A-Z0-9_]*)?\]\([^)]*\)\]?/g;
 /** Regex that matches Markdown fenced code blocks. */
 const CODE_FENCE_RE = /^```[\s\S]*?^```/gm;
-/** Regex that matches inline code spans. */
-const INLINE_CODE_RE = /`[^`]+`/g;
+/** Regex that matches inline code spans (single-line only — never cross newlines). */
+const INLINE_CODE_RE = /`[^`\n]+`/g;
 
 /**
  * Collect the character ranges (start, end) that should be excluded from
