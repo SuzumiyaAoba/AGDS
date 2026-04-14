@@ -107,22 +107,41 @@ apoc.import.file.enabled=true
 apoc.import.file.use_neo4j_config=true
 EOF
 
-            # Start Neo4j unless it is already running.
-            if ! neo4j status > /dev/null 2>&1; then
-              echo "==> Starting Neo4j…"
-              neo4j start
+            # Start Neo4j unless something is already listening on the bolt port.
+            # This lets Neo4j Desktop act as the database server: start your
+            # Desktop database *before* entering the dev shell and the nix-managed
+            # Neo4j will be skipped automatically.
+            if (echo >/dev/tcp/localhost/7687) 2>/dev/null; then
+              echo "==> Neo4j already reachable on :7687 — skipping nix-managed start."
+              echo "    (If this is Neo4j Desktop, make sure APOC Core is installed via"
+              echo "     the Desktop plugin manager for full AGDS functionality.)"
+              NEO4J_SOURCE="Neo4j Desktop (or external)"
+            elif neo4j status > /dev/null 2>&1; then
+              echo "==> Neo4j (nix-managed) already running."
+              NEO4J_SOURCE="nix-managed"
             else
-              echo "==> Neo4j already running."
+              echo "==> Starting Neo4j (nix-managed)…"
+              neo4j start
+              NEO4J_SOURCE="nix-managed"
             fi
 
             echo ""
             echo "AGDS dev environment ready."
             echo "  agds --help   show CLI commands"
             echo "  pnpm test     run all tests"
-            echo "  neo4j stop    stop Neo4j"
             echo ""
-            echo "Neo4j Browser : http://localhost:7474"
-            echo "Credentials   : neo4j / agds-dev-password"
+            echo "Neo4j ($NEO4J_SOURCE)"
+            echo "  Bolt URL       : bolt://localhost:7687"
+            echo "  HTTP Browser   : http://localhost:7474"
+            echo "  Credentials    : neo4j / agds-dev-password"
+            echo ""
+            echo "Neo4j Desktop — connect as a remote DBMS:"
+            echo "  Add Database → Remote connection → bolt://localhost:7687"
+            echo "  Username: neo4j   Password: agds-dev-password"
+            if [ "''${NEO4J_SOURCE}" = "nix-managed" ]; then
+              echo ""
+              echo "  neo4j stop    stop the nix-managed Neo4j"
+            fi
           '';
         };
 
